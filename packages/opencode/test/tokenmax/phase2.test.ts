@@ -136,15 +136,17 @@ describe("tokenmax phase2 plan", () => {
   })
 
   test("provider failure fallback skips failed key and PAYG", () => {
-    const job = planJobs({
+    const planned = planJobs({
       text: "Implement and debug this architecture refactor across modules then verify tests",
       routes,
       policy: POLICY_SEED,
       enabled: true,
       hasExistingSubtasks: false,
       isChildSession: false,
-    })[0]
+    })
+    const job = planned[0]
     expect(job).toBeTruthy()
+    if (!job) throw new Error("expected job")
     const next = fallbackJob(job, { routes, policy: POLICY_SEED, skipKeys: [job.decision.key] })
     expect(next).toBeTruthy()
     expect(next!.decision.key).not.toBe(job.decision.key)

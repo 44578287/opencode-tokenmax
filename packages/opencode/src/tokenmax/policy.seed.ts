@@ -1,4 +1,4 @@
-export const POLICY_SEED = {
+export const POLICY_SEED: TokenMaxPolicy = {
   version: 1,
   scoring: {
     missPenalty: 2,
@@ -58,7 +58,7 @@ export const POLICY_SEED = {
       prompt: "You are tokenmax-verify. Check the claimed work against files and tests. Report pass/fail with evidence.",
     },
   },
-} as const
+}
 
 export type TokenMaxPolicy = {
   version: number

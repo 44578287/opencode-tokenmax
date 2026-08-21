@@ -1165,7 +1165,7 @@ const layer = Layer.effect(
                       },
                     }
                     const out = yield* handleSubtask({
-                      task: task as SessionV1.SubtaskPart,
+                      task: task as unknown as SessionV1.SubtaskPart,
                       model: parentModel,
                       lastUser: message.info,
                       sessionID: input.sessionID,

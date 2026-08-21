@@ -1,4 +1,5 @@
 import type { Route, RouteDecision, Task } from "./types"
+import { routeKey } from "./types"
 import { decide } from "./router"
 import type { TokenMaxPolicy } from "./policy.seed"
 
@@ -49,7 +50,7 @@ export function planJobs(opts: {
   const skip = new Set(opts.skipKeys ?? [])
   const skipBilling = new Set(opts.policy.fallback.skipBilling)
   if (!opts.policy.budget.paygEnabled) skipBilling.add("PAYG_TOKEN")
-  const available = opts.routes.filter((r) => !skip.has(`${r.providerId}/${r.modelId}#${r.variant}`) && !skipBilling.has(r.billing))
+  const available = opts.routes.filter((r) => !skip.has(routeKey(r.providerId, r.modelId, r.variant)) && !skipBilling.has(r.billing))
   const jobs: PlannedJob[] = []
   for (const role of classified.roles) {
     const task: Task = { ...classified, taskClass: role }
@@ -74,7 +75,7 @@ export function fallbackJob(
   const skipBilling = new Set(opts.policy.fallback.skipBilling)
   if (!opts.policy.budget.paygEnabled) skipBilling.add("PAYG_TOKEN")
   const available = opts.routes.filter(
-    (r) => !skip.has(`${r.providerId}/${r.modelId}#${r.variant}`) && !skipBilling.has(r.billing),
+    (r) => !skip.has(routeKey(r.providerId, r.modelId, r.variant)) && !skipBilling.has(r.billing),
   )
   const decision = decide({ text: job.role, taskClass: job.role, complexity: "high" }, { enabled: true, routes: available, policy: opts.policy })
   if (!decision) return null
