@@ -41,8 +41,9 @@ They are **left intact** and will skip or fail on the fork. Do not delete them; 
 Fork-friendly workflow: **`.github/workflows/tokenmax-ci.yml`**
 
 - Runners: `ubuntu-latest`, `windows-latest`
-- Required jobs: typecheck, unsigned Windows Desktop artifact
-- Unit tests: `continue-on-error` (known upstream flakes on github-hosted runners; do not patch Core tests)
+- Required jobs: typecheck, **tokenmax-tests** (must not use continue-on-error), unsigned Windows Desktop artifact
+- Upstream unit tests: `continue-on-error` (known flakes on github-hosted runners; do not patch Core tests)
+- TokenMax native flag: `experimental.tokenmax.enabled` (default off = upstream model selection)
 - Triggers: `tokenmax/main`, `feature/**`, PRs, `workflow_dispatch`
 - Signing: skipped when Azure credentials are absent (`electron-builder.config.ts` `signWindows` no-ops)
 

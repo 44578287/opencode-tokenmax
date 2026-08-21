@@ -10,6 +10,9 @@ import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import { LegacyEvent } from "@opencode-ai/schema/legacy-event"
+import * as TokenMaxCommands from "@/tokenmax/commands"
+import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
+import { store as tokenmaxStore } from "@/tokenmax"
 
 type State = {
   commands: Record<string, Info>
@@ -85,6 +88,26 @@ const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+
+      for (const name of TokenMaxCommands.NATIVE_COMMANDS) {
+        commands[name] = {
+          name,
+          description: `TokenMax ${name.slice("tokenmax-".length)} (native, 0 LLM)`,
+          source: "command",
+          get template() {
+            try {
+              const snap = TokenMaxCommands.render(name, {
+                store: tokenmaxStore(),
+                enabled: tokenmaxEnabled(cfg),
+              })
+              return TokenMaxCommands.analyzePrompt(snap.text)
+            } catch {
+              return `TokenMax ${name}`
+            }
+          },
+          hints: ["$ARGUMENTS"],
+        }
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

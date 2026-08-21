@@ -185,6 +185,14 @@ export const Info = Schema.Struct({
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
+      tokenmax: Schema.optional(
+        Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Enable TokenMax native route decisions. When false or unset, session model selection matches upstream OpenCode.",
+          }),
+        }),
+      ),
     }),
   ),
 }).annotate({ identifier: "Config" })

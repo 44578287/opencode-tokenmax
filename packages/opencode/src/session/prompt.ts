@@ -48,6 +48,9 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import * as TokenMaxCommands from "@/tokenmax/commands"
+import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
+import { store as tokenmaxStore } from "@/tokenmax"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -1359,6 +1362,54 @@ const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
+      if (TokenMaxCommands.isDeterministic(input.command, input.arguments)) {
+        const cfg = yield* config.get()
+        const text = TokenMaxCommands.render(input.command, {
+          store: tokenmaxStore(),
+          enabled: tokenmaxEnabled(cfg),
+        }).text
+        const user = yield* createUserMessage({
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          parts: [
+            {
+              type: "text",
+              text: `/${input.command}${input.arguments ? " " + input.arguments : ""}`,
+            },
+          ],
+        })
+        const inst = yield* InstanceState.context
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: user.info.id,
+          sessionID: input.sessionID,
+          mode: user.info.agent,
+          agent: user.info.agent,
+          variant: user.info.model.variant,
+          path: { cwd: inst.directory, root: inst.worktree },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: user.info.model.modelID,
+          providerID: user.info.model.providerID,
+          finish: "stop",
+          time: { created: Date.now(), completed: Date.now() },
+        })
+        const part = yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text,
+        })
+        yield* events.publish(Command.Event.Executed, {
+          name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+          messageID: user.info.id,
+        })
+        return { info: assistant, parts: [part] }
+      }
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)

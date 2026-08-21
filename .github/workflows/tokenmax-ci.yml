@@ -48,6 +48,17 @@ jobs:
           GITHUB_ACTIONS: "false"
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+  tokenmax-tests:
+    name: tokenmax-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - name: Run TokenMax tests
+        working-directory: packages/opencode
+        run: bun test test/tokenmax
+
   desktop-windows:
     name: desktop-windows
     runs-on: windows-latest
