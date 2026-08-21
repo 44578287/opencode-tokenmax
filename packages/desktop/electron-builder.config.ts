@@ -51,6 +51,7 @@ const getBase = (appId: string): Configuration => ({
   // https://developer.gnome.org/documentation/guidelines/maintainer/integrating.html
   // https://www.electron.build/docs/linux/
   extraMetadata: {
+    name: channel === "dev" ? "opencode-tokenmax-dev" : "@opencode-ai/desktop",
     desktopName: `${appId}.desktop`,
   },
   files: ["out/**/*", "resources/**/*", "!resources/opencode-cli*"],
@@ -132,6 +133,7 @@ function getConfig() {
           ...base.nsis,
           shortcutName: APP_NAMES.dev,
           uninstallDisplayName: APP_NAMES.dev,
+          guid: "a91c3e77-4f2b-4d1a-9c08-7e5b2f1a90d3",
         },
         deb: { fpm: [metainfoFpm(appId)] },
         rpm: { packageName: "opencode-tokenmax-dev", fpm: [metainfoFpm(appId)] },

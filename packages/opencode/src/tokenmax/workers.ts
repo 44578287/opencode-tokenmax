@@ -1,7 +1,7 @@
-import type { Database } from "bun:sqlite"
+import type { SqliteDb } from "./sqlite"
 import type { TokenMaxWorker } from "./types"
 
-export function upsertWorker(db: Database, worker: TokenMaxWorker) {
+export function upsertWorker(db: SqliteDb, worker: TokenMaxWorker) {
   db.run(
     `INSERT INTO workers(id,parent_session_id,child_session_id,role,provider,model,variant,state,started_at,completed_at,fallback_from,error_category,billing,progress)
      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -36,14 +36,14 @@ export function upsertWorker(db: Database, worker: TokenMaxWorker) {
   )
 }
 
-export function listWorkers(db: Database, parentSessionID?: string): TokenMaxWorker[] {
+export function listWorkers(db: SqliteDb, parentSessionID?: string): TokenMaxWorker[] {
   const rows = parentSessionID
     ? (db.query("SELECT * FROM workers WHERE parent_session_id = ? ORDER BY started_at").all(parentSessionID) as any[])
     : (db.query("SELECT * FROM workers ORDER BY started_at DESC LIMIT 50").all() as any[])
   return rows.map(rowToWorker)
 }
 
-export function cancelRunning(db: Database, parentSessionID: string) {
+export function cancelRunning(db: SqliteDb, parentSessionID: string) {
   db.run(
     `UPDATE workers SET state='cancelled', completed_at=? WHERE parent_session_id=? AND state IN ('queued','running')`,
     [new Date().toISOString(), parentSessionID],

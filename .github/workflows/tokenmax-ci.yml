@@ -81,10 +81,24 @@ jobs:
           OPENCODE_CHANNEL: dev
       - name: Package Windows (unsigned)
         working-directory: packages/desktop
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win --publish never --config electron-builder.config.ts
         env:
           OPENCODE_CHANNEL: dev
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Scan bundle for bun:sqlite
+        working-directory: packages/desktop
+        shell: pwsh
+        run: |
+          $hits = @()
+          Get-ChildItem -Recurse -Include *.js out/main, ../opencode/dist/node -ErrorAction SilentlyContinue | ForEach-Object {
+            if (Select-String -LiteralPath $_.FullName -Pattern "bun:sqlite" -SimpleMatch -Quiet) { $hits += $_.FullName }
+          }
+          if ($hits.Count -gt 0) { throw "bun:sqlite leaked into $($hits -join ', ')" }
+          Write-Host "No bun:sqlite in Electron/Node bundles"
+      - name: Windows install/launch E2E
+        working-directory: packages/desktop
+        shell: pwsh
+        run: ./scripts/windows-install-e2e.ps1
       - name: Upload Windows Desktop artifact
         uses: actions/upload-artifact@v4
         with:
@@ -92,5 +106,6 @@ jobs:
           path: |
             packages/desktop/dist/*.exe
             packages/desktop/dist/*.yml
+            packages/desktop/dist/e2e-report.json
           if-no-files-found: error
           retention-days: 14

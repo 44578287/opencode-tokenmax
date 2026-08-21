@@ -25,6 +25,10 @@ for (const channel of channels) {
       expect(config.productName).toBe("OpenCode TokenMax Dev")
       expect(config.protocols).toEqual({ name: "OpenCode TokenMax Dev", schemes: ["opencode-tokenmax"] })
       expect(config.artifactName).toBe("opencode-tokenmax-dev-${os}-${arch}.${ext}")
+      expect(config.extraMetadata?.name).toBe("opencode-tokenmax-dev")
+      expect(config.nsis?.guid).toBe("a91c3e77-4f2b-4d1a-9c08-7e5b2f1a90d3")
+      expect(config.nsis?.shortcutName).toBe("OpenCode TokenMax Dev")
+      expect(config.nsis?.uninstallDisplayName).toBe("OpenCode TokenMax Dev")
     }
     expect(config.extraMetadata?.desktopName).toBe(`${channel.appId}.desktop`)
     expect(config.linux?.executableName).toBe(channel.appId)

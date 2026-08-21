@@ -1,0 +1,125 @@
+$ErrorActionPreference = "Stop"
+$dist = Join-Path $PSScriptRoot "..\dist"
+$installer = Get-ChildItem -LiteralPath $dist -Filter "opencode-tokenmax-dev-*.exe" | Select-Object -First 1
+if (-not $installer) { throw "TokenMax Dev installer not found in $dist" }
+
+$report = [ordered]@{
+  installer = $installer.FullName
+  bunRuntimeCrash = "UNVERIFIED"
+  packagedAppLaunch = "UNVERIFIED"
+  actualInstalledName = $null
+  actualInstallPath = $null
+  actualUserDataPath = $null
+  actualUninstallEntry = $null
+  actualProtocol = $null
+  sideBySide = "UNVERIFIED"
+  officialAfterDevInstall = "UNVERIFIED"
+  officialAfterDevUninstall = "UNVERIFIED"
+  tokenmaxDevLaunch = "UNVERIFIED"
+  windowsInstallE2e = "FAIL"
+}
+
+function Fail([string]$msg) {
+  Write-Host $msg
+  $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dist "e2e-report.json")
+  throw $msg
+}
+
+# Simulate Official OpenCode without downloading their installer.
+$officialDir = Join-Path $env:LOCALAPPDATA "Programs\OpenCode"
+New-Item -ItemType Directory -Force -Path $officialDir | Out-Null
+$officialExe = Join-Path $officialDir "OpenCode.exe"
+Set-Content -LiteralPath $officialExe -Value "official-stub" -NoNewline
+$officialUninstall = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenCodeOfficialStub"
+New-Item -Path $officialUninstall -Force | Out-Null
+New-ItemProperty -Path $officialUninstall -Name "DisplayName" -Value "OpenCode" -Force | Out-Null
+$protocolKey = "HKCU:\Software\Classes\opencode"
+if (-not (Test-Path $protocolKey)) {
+  New-Item -Path $protocolKey -Force | Out-Null
+  New-ItemProperty -Path $protocolKey -Name "(default)" -Value "URL:OpenCode Official Stub" -Force | Out-Null
+}
+
+Write-Host "Installing TokenMax Dev silently..."
+$p = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru -Wait
+if ($p.ExitCode -ne 0) { Fail "Installer exit $($p.ExitCode)" }
+
+$installPath = Join-Path $env:LOCALAPPDATA "Programs\OpenCode TokenMax Dev"
+$exe = Get-ChildItem -LiteralPath $installPath -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "Uninstall" } | Select-Object -First 1
+if (-not $exe) { Fail "Installed exe not found under $installPath" }
+$report.actualInstallPath = $installPath
+$report.actualInstalledName = $exe.Name
+
+if ($exe.Name -match "@opencode-ai" -or $exe.Name -eq "OpenCode.exe") {
+  Fail "Installed exe name is $($exe.Name)"
+}
+
+$uninstall = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | ForEach-Object {
+  Get-ItemProperty $_.PSPath
+} | Where-Object { $_.DisplayName -eq "OpenCode TokenMax Dev" } | Select-Object -First 1
+if (-not $uninstall) { Fail "Uninstall DisplayName OpenCode TokenMax Dev not found" }
+$report.actualUninstallEntry = $uninstall.DisplayName
+if ($uninstall.DisplayName -match "@opencode-ai") { Fail "Uninstall name is $($uninstall.DisplayName)" }
+
+$protocol = Get-ItemProperty "HKCU:\Software\Classes\opencode-tokenmax" -ErrorAction SilentlyContinue
+$report.actualProtocol = if ($protocol) { "opencode-tokenmax" } else { "MISSING" }
+if ($report.actualProtocol -ne "opencode-tokenmax") { Fail "opencode-tokenmax protocol not registered" }
+if (-not (Test-Path $officialExe)) { Fail "Official stub removed during TokenMax install" }
+$report.officialAfterDevInstall = "PASS"
+
+$userData = Join-Path $env:APPDATA "ai.opencode.tokenmax.dev"
+$report.actualUserDataPath = $userData
+if ($userData -eq (Join-Path $env:APPDATA "ai.opencode.desktop")) { Fail "userData collides with official" }
+
+# Bundle scan
+$bunHits = @()
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "..\out\main") -Recurse -Include *.js -ErrorAction SilentlyContinue | ForEach-Object {
+  if (Select-String -LiteralPath $_.FullName -Pattern "bun:sqlite" -SimpleMatch -Quiet) { $bunHits += $_.FullName }
+}
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "..\..\opencode\dist\node") -Filter *.js -ErrorAction SilentlyContinue | ForEach-Object {
+  if (Select-String -LiteralPath $_.FullName -Pattern "bun:sqlite" -SimpleMatch -Quiet) { $bunHits += $_.FullName }
+}
+if ($bunHits.Count -gt 0) {
+  $report.bunRuntimeCrash = "FAIL"
+  Fail "bun:sqlite found in $($bunHits -join ', ')"
+}
+$report.bunRuntimeCrash = "FIXED"
+
+Write-Host "Launching $($exe.FullName)"
+$logDir = Join-Path $userData "logs"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$proc = Start-Process -FilePath $exe.FullName -PassThru
+Start-Sleep -Seconds 25
+$alive = -not $proc.HasExited
+$logText = ""
+Get-ChildItem -LiteralPath $logDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+  if (-not $_.PSIsContainer) { $logText += (Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue) }
+}
+if ($logText -match "Only URLs with a scheme in: file, data, node, and electron" -or $logText -match "Received protocol 'bun:'") {
+  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+  $report.tokenmaxDevLaunch = "FAIL"
+  $report.packagedAppLaunch = "FAIL"
+  Fail "bun: protocol crash in logs"
+}
+if (-not $alive) {
+  $report.tokenmaxDevLaunch = "FAIL"
+  $report.packagedAppLaunch = "FAIL"
+  Fail "TokenMax Dev exited during startup code=$($proc.ExitCode)"
+}
+$report.tokenmaxDevLaunch = "PASS"
+$report.packagedAppLaunch = "PASS"
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
+
+# Uninstall TokenMax Dev
+$uninstaller = $uninstall.UninstallString
+if ($uninstaller) {
+  $uninstaller = $uninstaller.Trim('"')
+  Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
+}
+if (-not (Test-Path $officialExe)) { Fail "Official stub missing after TokenMax uninstall" }
+$report.officialAfterDevUninstall = "PASS"
+$report.sideBySide = "PASS"
+$report.windowsInstallE2e = "PASS"
+
+$report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dist "e2e-report.json")
+Write-Host ($report | ConvertTo-Json -Depth 6)

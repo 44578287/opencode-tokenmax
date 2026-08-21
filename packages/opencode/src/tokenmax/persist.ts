@@ -1,5 +1,5 @@
-import { Database } from "bun:sqlite"
 import fs from "fs"
+import { openSqlite, type SqliteDb } from "./sqlite"
 import path from "path"
 import { createHash } from "crypto"
 
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS workers (
  `
 
 export interface Store {
-  db: Database
+  db: SqliteDb
   dbPath: string
   close(): void
 }
@@ -115,12 +115,12 @@ function fingerprint(file: string): string {
   return hash.digest("hex")
 }
 
-function getMeta(db: Database, key: string): string | undefined {
+function getMeta(db: SqliteDb, key: string): string | undefined {
   const row = db.query("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined
   return row?.value
 }
 
-function setMeta(db: Database, key: string, value: string) {
+function setMeta(db: SqliteDb, key: string, value: string) {
   db.run("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [key, value])
 }
 
@@ -139,7 +139,7 @@ export function backupDir(dataDir: string): string {
 export function openStore(opts: { dataDir: string; configDir?: string }): Store {
   const dbPath = nativeDbPath(opts.dataDir)
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
-  const db = new Database(dbPath)
+  const db = openSqlite(dbPath)
   db.run("PRAGMA journal_mode=WAL")
   db.run("PRAGMA busy_timeout=5000")
   db.run("PRAGMA foreign_keys=ON")
@@ -168,7 +168,7 @@ export function openStore(opts: { dataDir: string; configDir?: string }): Store 
   }
 }
 
-export function importPluginDb(db: Database, dataDir: string, oldPath: string): { imported: boolean; oldRecords: number; migrated: number } {
+export function importPluginDb(db: SqliteDb, dataDir: string, oldPath: string): { imported: boolean; oldRecords: number; migrated: number } {
   if (!fs.existsSync(oldPath)) return { imported: false, oldRecords: 0, migrated: 0 }
   const fp = fingerprint(oldPath)
   if (getMeta(db, "imported_plugin_fingerprint") === fp) {
