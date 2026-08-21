@@ -134,6 +134,7 @@ function getConfig() {
           shortcutName: APP_NAMES.dev,
           uninstallDisplayName: APP_NAMES.dev,
           guid: "a91c3e77-4f2b-4d1a-9c08-7e5b2f1a90d3",
+          include: "build/installer.nsh",
         },
         deb: { fpm: [metainfoFpm(appId)] },
         rpm: { packageName: "opencode-tokenmax-dev", fpm: [metainfoFpm(appId)] },

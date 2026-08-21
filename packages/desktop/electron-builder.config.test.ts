@@ -29,6 +29,7 @@ for (const channel of channels) {
       expect(config.nsis?.guid).toBe("a91c3e77-4f2b-4d1a-9c08-7e5b2f1a90d3")
       expect(config.nsis?.shortcutName).toBe("OpenCode TokenMax Dev")
       expect(config.nsis?.uninstallDisplayName).toBe("OpenCode TokenMax Dev")
+      expect(config.nsis?.include).toBe("build/installer.nsh")
     }
     expect(config.extraMetadata?.desktopName).toBe(`${channel.appId}.desktop`)
     expect(config.linux?.executableName).toBe(channel.appId)

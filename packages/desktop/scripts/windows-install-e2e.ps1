@@ -85,6 +85,16 @@ if ($uninstall.DisplayName -match "@opencode-ai") { Fail "Uninstall name is $($u
 $protocol = Get-ItemProperty "HKCU:\Software\Classes\opencode-tokenmax" -ErrorAction SilentlyContinue
 $report.actualProtocol = if ($protocol) { "opencode-tokenmax" } else { "MISSING" }
 if ($report.actualProtocol -ne "opencode-tokenmax") { Fail "opencode-tokenmax protocol not registered" }
+if (-not $protocol."URL Protocol") { Fail "opencode-tokenmax URL Protocol flag missing" }
+
+# Hijack checks: official opencode:// must still point at official, not TokenMax
+$officialProtoCmd = (Get-ItemProperty "HKCU:\Software\Classes\opencode\shell\open\command" -ErrorAction SilentlyContinue)."(default)"
+if (-not $officialProtoCmd) { Fail "official opencode:// protocol missing after TokenMax install" }
+if ($officialProtoCmd -match "TokenMax") { Fail "TokenMax hijacked official opencode:// handler: $officialProtoCmd" }
+
+if ($exe.Name -ne "OpenCode TokenMax Dev.exe") { Fail "Installed exe name is $($exe.Name), expected 'OpenCode TokenMax Dev.exe'" }
+if ((Split-Path $installPath -Leaf) -ne "OpenCode TokenMax Dev") { Fail "Install dir is $installPath" }
+
 if (-not (Test-Path $officialExe)) { Fail "Official stub removed during TokenMax install" }
 $report.officialAfterDevInstall = "PASS"
 
