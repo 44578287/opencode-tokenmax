@@ -40,12 +40,34 @@ if (-not (Test-Path $protocolKey)) {
 }
 
 Write-Host "Installing TokenMax Dev silently..."
-$p = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru -Wait
-if ($p.ExitCode -ne 0) { Fail "Installer exit $($p.ExitCode)" }
-
 $installPath = Join-Path $env:LOCALAPPDATA "Programs\OpenCode TokenMax Dev"
-$exe = Get-ChildItem -LiteralPath $installPath -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "Uninstall" } | Select-Object -First 1
-if (-not $exe) { Fail "Installed exe not found under $installPath" }
+New-Item -ItemType Directory -Force -Path $installPath | Out-Null
+$p = Start-Process -FilePath $installer.FullName -ArgumentList "/S","/D=$installPath" -PassThru -Wait
+if ($p.ExitCode -ne 0) { Fail "Installer exit $($p.ExitCode)" }
+Start-Sleep -Seconds 5
+
+$programs = Join-Path $env:LOCALAPPDATA "Programs"
+Write-Host "Programs:"
+Get-ChildItem -LiteralPath $programs -ErrorAction SilentlyContinue | ForEach-Object { Write-Host " - $($_.Name)" }
+
+$exe = $null
+$candidates = @(
+  $installPath,
+  (Join-Path $programs "opencode-tokenmax-dev"),
+  (Join-Path $programs "OpenCode TokenMax Dev"),
+  (Join-Path $programs "@opencode-ai desktop"),
+  (Join-Path $programs "OpenCode Dev")
+)
+foreach ($dir in $candidates) {
+  if (-not (Test-Path $dir)) { continue }
+  $found = Get-ChildItem -LiteralPath $dir -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "Uninstall" } | Select-Object -First 1
+  if ($found) { $exe = $found; $installPath = $dir; break }
+}
+if (-not $exe) {
+  $found = Get-ChildItem -LiteralPath $programs -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "TokenMax|opencode-tokenmax" } | Select-Object -First 1
+  if ($found) { $exe = $found; $installPath = $found.DirectoryName }
+}
+if (-not $exe) { Fail "Installed exe not found under $programs" }
 $report.actualInstallPath = $installPath
 $report.actualInstalledName = $exe.Name
 
