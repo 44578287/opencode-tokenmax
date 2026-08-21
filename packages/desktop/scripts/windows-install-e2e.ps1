@@ -146,11 +146,27 @@ $report.packagedAppLaunch = "PASS"
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 
-# Uninstall TokenMax Dev
-$uninstaller = $uninstall.UninstallString
-if ($uninstaller) {
-  $uninstaller = $uninstaller.Trim('"')
-  Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -ErrorAction SilentlyContinue
+# Uninstall TokenMax Dev — UninstallString looks like: "C:\...\Uninstall Foo.exe" /currentuser
+$rawUninstall = [string]$uninstall.UninstallString
+if ($rawUninstall) {
+  $unExe = $null
+  $unArgs = @()
+  if ($rawUninstall.StartsWith('"')) {
+    $endIdx = $rawUninstall.IndexOf('"', 1)
+    if ($endIdx -gt 0) {
+      $unExe = $rawUninstall.Substring(1, $endIdx - 1)
+      $rest = $rawUninstall.Substring($endIdx + 1).Trim()
+      if ($rest) { $unArgs += ($rest -split '\s+' | Where-Object { $_ }) }
+    }
+  } else {
+    $split = $rawUninstall.Split(' ', 2)
+    $unExe = $split[0]
+    if ($split.Length -gt 1 -and $split[1]) { $unArgs += ($split[1] -split '\s+' | Where-Object { $_ }) }
+  }
+  if (-not ($unArgs -contains "/S")) { $unArgs += "/S" }
+  Write-Host "Uninstalling via $unExe $($unArgs -join ' ')"
+  Start-Process -FilePath $unExe -ArgumentList $unArgs -Wait
+  Start-Sleep -Seconds 5
 }
 if (-not (Test-Path $officialExe)) { Fail "Official stub missing after TokenMax uninstall" }
 $report.officialAfterDevUninstall = "PASS"
