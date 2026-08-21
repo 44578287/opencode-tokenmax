@@ -21,6 +21,7 @@ const metainfoFpm = (appId: string) =>
 async function signWindows(configuration: { path: string }) {
   if (process.platform !== "win32") return
   if (process.env.GITHUB_ACTIONS !== "true") return
+  if (!process.env.AZURE_CLIENT_ID && !process.env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME) return
 
   await execFileAsync(
     "pwsh",

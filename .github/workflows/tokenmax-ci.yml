@@ -1,0 +1,77 @@
+name: tokenmax-ci
+
+on:
+  push:
+    branches:
+      - tokenmax/main
+      - "feature/**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tokenmax-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - run: bun turbo typecheck
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - name: Run unit tests
+        timeout-minutes: 20
+        run: bun turbo test
+        env:
+          GITHUB_ACTIONS: "false"
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+
+  desktop-windows:
+    name: desktop-windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+      - name: Prepare desktop
+        working-directory: packages/desktop
+        run: bun ./scripts/prepare.ts
+        env:
+          OPENCODE_CHANNEL: dev
+      - name: Build desktop
+        working-directory: packages/desktop
+        run: bun run build
+        env:
+          OPENCODE_CHANNEL: dev
+      - name: Package Windows (unsigned)
+        working-directory: packages/desktop
+        run: npx electron-builder --win --publish never
+        env:
+          OPENCODE_CHANNEL: dev
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Upload Windows Desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-desktop-windows
+          path: |
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/*.yml
+          if-no-files-found: error
+          retention-days: 14
