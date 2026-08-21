@@ -1,25 +1,33 @@
 import type { Route, RouteDecision, Task } from "./types"
 import { routeKey } from "./types"
+import type { TokenMaxPolicy } from "./policy.seed"
+import { POLICY_SEED } from "./policy.seed"
 
 export interface DecideContext {
   enabled: boolean
   routes: Route[]
+  policy?: TokenMaxPolicy
 }
 
 export function decide(task: Task, ctx: DecideContext): RouteDecision | null {
   if (!ctx.enabled) return null
-  const required = task.requiredSuccess ?? 0.5
+  const policy = ctx.policy ?? POLICY_SEED
+  const required = task.requiredSuccess ?? policy.scoring.requiredSuccess
   const scored = ctx.routes
     .map((route) => {
       const capabilityFit = route.health
       const historicalConfidence = 0
       const quotaPressure = route.quotaPressure
       const estimatedMarginalCost =
-        route.billing === "PAYG_TOKEN" && route.inputPerMtok != null ? route.inputPerMtok : route.billing === "FREE" || route.billing === "LOCAL" ? 0 : null
+        route.billing === "PAYG_TOKEN" && route.inputPerMtok != null
+          ? route.inputPerMtok
+          : route.billing === "FREE" || route.billing === "LOCAL"
+            ? 0
+            : null
       const quality = capabilityFit
       const miss = Math.max(0, required - quality)
       const money = estimatedMarginalCost ?? 0
-      const score = quality - miss * 2 - money * 0.01
+      const score = quality - miss * policy.scoring.missPenalty - money * policy.scoring.moneyWeight
       const reason = `utility quality=${quality.toFixed(2)} billing=${route.billing} variant=${route.variant || "default"}`
       return {
         route,

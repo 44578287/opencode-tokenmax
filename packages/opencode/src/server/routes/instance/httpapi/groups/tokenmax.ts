@@ -13,6 +13,8 @@ const Worker = Schema.Struct({
   provider: Schema.String,
   model: Schema.String,
   variant: Schema.String,
+  billing: Schema.optional(Schema.String),
+  progress: Schema.optional(Schema.String),
   state: Schema.String,
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),

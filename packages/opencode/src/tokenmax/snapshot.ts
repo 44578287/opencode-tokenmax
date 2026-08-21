@@ -21,6 +21,8 @@ export function status(store: Store, enabled: boolean): TokenMaxStatus {
         state: (row.state as TokenMaxWorker["state"]) ?? "queued",
         startedAt: row.started_at,
         completedAt: row.completed_at,
+        billing: row.billing ? String(row.billing) : undefined,
+        progress: row.progress ? String(row.progress) : undefined,
         fallbackFrom: row.fallback_from,
         errorCategory: row.error_category,
       }),

@@ -51,6 +51,13 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import * as TokenMaxCommands from "@/tokenmax/commands"
 import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
 import { store as tokenmaxStore } from "@/tokenmax"
+import { loadPolicy } from "@/tokenmax/policy"
+import { planJobs, groupPhases, fallbackJob } from "@/tokenmax/plan"
+import { buildContextPackage, childPrompt } from "@/tokenmax/context"
+import { upsertWorker } from "@/tokenmax/workers"
+import { listRoutes, rowsToRoutes } from "@/tokenmax/persist"
+import { classifyError } from "@/tokenmax/error"
+import { Global } from "@opencode-ai/core/global"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -430,7 +437,12 @@ const layer = Layer.effect(
         } satisfies SessionV1.ToolPart)
       }
 
-      if (!task.command) return
+      if (!task.command) {
+        return {
+          childSessionID: result?.metadata?.sessionId as string | undefined,
+          error,
+        }
+      }
 
       const summaryUserMsg: SessionV1.User = {
         id: MessageID.ascending(),
@@ -449,6 +461,10 @@ const layer = Layer.effect(
         text: "Summarize the task tool output above and continue with your task.",
         synthetic: true,
       } satisfies SessionV1.TextPart)
+      return {
+        childSessionID: result?.metadata?.sessionId as string | undefined,
+        error,
+      }
     })
 
     const shellImpl = Effect.fn("SessionPrompt.shellImpl")(function* (input: ShellInput, ready?: Latch.Latch) {
@@ -1070,6 +1086,154 @@ const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
+
+      const cfg = yield* config.get()
+      if (tokenmaxEnabled(cfg) && !session.parentID) {
+        const userText = message.parts
+          .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic)
+          .map((p) => p.text)
+          .join("\n")
+        const originalText = userText
+        const hasSub = message.parts.some((p) => p.type === "subtask")
+        const policy = loadPolicy(Global.Path.config)
+        const routes = rowsToRoutes(listRoutes(tokenmaxStore()))
+        const jobs = planJobs({
+          text: userText,
+          routes,
+          policy,
+          enabled: true,
+          hasExistingSubtasks: hasSub,
+          isChildSession: false,
+        })
+        if (jobs.length > 0) {
+          const parentModel = yield* getModel(message.info.model.providerID, message.info.model.modelID, input.sessionID)
+          const prior = yield* sessions.messages({ sessionID: input.sessionID, limit: policy.context.maxHistoryMessages }).pipe(Effect.orDie)
+          const history = prior.flatMap((m) => {
+            const text = m.parts
+              .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic)
+              .map((p) => p.text)
+              .join("\n")
+              .slice(0, 500)
+            if (!text) return []
+            return [{ role: m.info.role, text }]
+          })
+          const pkg = buildContextPackage({
+            objective: userText.slice(0, 500),
+            currentTask: userText,
+            workspace: session.path,
+            history,
+            previousResults: [],
+            policy,
+          })
+          const db = tokenmaxStore().db
+          const skipKeys: string[] = []
+          for (const phase of groupPhases(jobs, policy)) {
+            yield* Effect.forEach(
+              phase,
+              (job) =>
+                Effect.gen(function* () {
+                  let current = job
+                  let attempts = 0
+                  const workerId = ulid()
+                  while (attempts < policy.fallback.maxAttempts) {
+                    attempts++
+                    upsertWorker(db, {
+                      id: workerId,
+                      parentSessionID: input.sessionID,
+                      childSessionID: "",
+                      role: current.role,
+                      provider: current.decision.provider,
+                      model: current.decision.model,
+                      variant: current.decision.variant,
+                      billing: current.decision.billing,
+                      progress: "running",
+                      state: "running",
+                      startedAt: new Date().toISOString(),
+                      completedAt: null,
+                      fallbackFrom: attempts > 1 ? job.decision.key : null,
+                      errorCategory: null,
+                    })
+                    const task = {
+                      type: "subtask" as const,
+                      prompt: childPrompt(current, pkg, policy.workers[current.role]?.prompt ?? ""),
+                      description: current.role,
+                      agent: current.agent,
+                      model: {
+                        providerID: current.decision.provider,
+                        modelID: current.decision.model,
+                        variant: current.decision.variant,
+                      },
+                    }
+                    const out = yield* handleSubtask({
+                      task: task as SessionV1.SubtaskPart,
+                      model: parentModel,
+                      lastUser: message.info,
+                      sessionID: input.sessionID,
+                      session,
+                      msgs: [message],
+                    }).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.succeed({
+                          childSessionID: undefined as string | undefined,
+                          error: Cause.squash(cause) instanceof Error ? (Cause.squash(cause) as Error) : new Error(String(Cause.squash(cause))),
+                        }),
+                      ),
+                    )
+                    if (out?.childSessionID && !out.error) {
+                      upsertWorker(db, {
+                        id: workerId,
+                        parentSessionID: input.sessionID,
+                        childSessionID: out.childSessionID,
+                        role: current.role,
+                        provider: current.decision.provider,
+                        model: current.decision.model,
+                        variant: current.decision.variant,
+                        billing: current.decision.billing,
+                        progress: "completed",
+                        state: "completed",
+                        startedAt: new Date().toISOString(),
+                        completedAt: new Date().toISOString(),
+                        fallbackFrom: attempts > 1 ? job.decision.key : null,
+                        errorCategory: null,
+                      })
+                      return
+                    }
+                    const category = classifyError(out?.error?.message ?? "unknown")
+                    skipKeys.push(current.decision.key)
+                    const next = fallbackJob(current, { routes, policy, skipKeys })
+                    upsertWorker(db, {
+                      id: workerId,
+                      parentSessionID: input.sessionID,
+                      childSessionID: out?.childSessionID ?? "",
+                      role: current.role,
+                      provider: current.decision.provider,
+                      model: current.decision.model,
+                      variant: current.decision.variant,
+                      billing: current.decision.billing,
+                      progress: "failed",
+                      state: next && attempts < policy.fallback.maxAttempts ? "running" : "failed",
+                      startedAt: new Date().toISOString(),
+                      completedAt: next ? null : new Date().toISOString(),
+                      fallbackFrom: attempts > 1 ? job.decision.key : null,
+                      errorCategory: category,
+                    })
+                    if (!next) return
+                    current = next
+                  }
+                }),
+              { concurrency: Math.max(1, phase.length) },
+            )
+          }
+          const still = message.parts
+            .filter((p): p is SessionV1.TextPart => p.type === "text" && !p.synthetic)
+            .map((p) => p.text)
+            .join("\n")
+          if (still !== originalText) {
+            yield* Effect.logError("tokenmax mutated user text; refusing to continue dispatch")
+          }
+        }
+      }
+
       return yield* loop({ sessionID: input.sessionID })
     })
 
@@ -1192,7 +1356,7 @@ const layer = Layer.effect(
             role: "assistant",
             mode: agent.name,
             agent: agent.name,
-            variant: lastUser.model.variant,
+        variant: (task.model as { variant?: string } | undefined)?.variant || lastUser.model.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },

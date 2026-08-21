@@ -72,6 +72,7 @@ import {
 } from "@/pages/session/composer"
 import { createOpenReviewFile, createSessionTabs, createSizing, shouldShowFileTree } from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/timeline/message-timeline"
+import { TokenMaxWorkersBanner } from "@/pages/session/tokenmax-workers"
 import { createTimelineModel } from "@/pages/session/timeline/model"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
@@ -2083,6 +2084,17 @@ export default function Page() {
           <Match when={params.id}>
             <Show when={messagesReady() ? params.id : undefined} keyed>
               {(_id) => (
+                <>
+                <TokenMaxWorkersBanner
+                  parentSessionID={params.id!}
+                  onOpen={(childId) =>
+                    navigate(
+                      params.serverKey
+                        ? sessionHref(requireServerKey(params.serverKey), childId)
+                        : legacySessionHref(sdk().directory, childId),
+                    )
+                  }
+                />
                 <MessageTimeline
                   actions={actions}
                   scroll={ui.scroll}
@@ -2119,6 +2131,7 @@ export default function Page() {
                     scrollToEnd = fn
                   }}
                 />
+                </>
               )}
             </Show>
           </Match>

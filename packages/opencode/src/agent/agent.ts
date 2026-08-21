@@ -31,6 +31,16 @@ import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/l
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { loadPolicy } from "@/tokenmax/policy"
+import { POLICY_SEED } from "@/tokenmax/policy.seed"
+
+function tokenmaxWorkerPrompt(role: "search" | "exec" | "debug" | "verify") {
+  try {
+    return loadPolicy(Global.Path.config).workers[role].prompt
+  } catch {
+    return POLICY_SEED.workers[role].prompt
+  }
+}
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -215,6 +225,87 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          "tokenmax-search": {
+            name: "tokenmax-search",
+            description: "TokenMax search worker. Read-only repository search.",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            prompt: tokenmaxWorkerPrompt("search"),
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                read: "allow",
+                bash: "allow",
+                webfetch: "allow",
+                websearch: "allow",
+              }),
+              user,
+            ),
+            options: {},
+          },
+          "tokenmax-exec": {
+            name: "tokenmax-exec",
+            description: "TokenMax exec worker. Mechanical edits in listed files.",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            prompt: tokenmaxWorkerPrompt("exec"),
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                todowrite: "deny",
+              }),
+              user,
+            ),
+            options: {},
+          },
+          "tokenmax-debug": {
+            name: "tokenmax-debug",
+            description: "TokenMax debug worker. Diagnose root cause.",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            prompt: tokenmaxWorkerPrompt("debug"),
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                read: "allow",
+                bash: "allow",
+              }),
+              user,
+            ),
+            options: {},
+          },
+          "tokenmax-verify": {
+            name: "tokenmax-verify",
+            description: "TokenMax verify worker. Check claimed work.",
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            prompt: tokenmaxWorkerPrompt("verify"),
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                read: "allow",
+                bash: "allow",
+              }),
+              user,
+            ),
+            options: {},
           },
           compaction: {
             name: "compaction",

@@ -93,10 +93,12 @@ CREATE TABLE IF NOT EXISTS workers (
   state TEXT,
   started_at TEXT,
   completed_at TEXT,
-  fallback_from TEXT,
-  error_category TEXT
-);
-`
+   fallback_from TEXT,
+   error_category TEXT,
+   billing TEXT,
+   progress TEXT
+ );
+ `
 
 export interface Store {
   db: Database
@@ -142,6 +144,13 @@ export function openStore(opts: { dataDir: string; configDir?: string }): Store 
   db.run("PRAGMA busy_timeout=5000")
   db.run("PRAGMA foreign_keys=ON")
   db.exec(SCHEMA)
+  for (const col of ["billing TEXT", "progress TEXT"]) {
+    try {
+      db.run(`ALTER TABLE workers ADD COLUMN ${col}`)
+    } catch {
+      // already exists
+    }
+  }
   const ver = db.query("SELECT MAX(version) AS v FROM schema_version").get() as { v: number | null }
   if (!ver?.v) {
     db.run("INSERT INTO schema_version(version, applied_at) VALUES(?, ?)", [NATIVE_SCHEMA_VERSION, new Date().toISOString()])
@@ -238,6 +247,26 @@ export function importPluginDb(db: Database, dataDir: string, oldPath: string): 
   } finally {
     db.exec("DETACH DATABASE old")
   }
+}
+
+export function rowsToRoutes(rows: Array<Record<string, unknown>>): import("./types").Route[] {
+  return rows.map((row) => ({
+    providerId: String(row.provider_id),
+    modelId: String(row.model_id),
+    variant: String(row.variant ?? ""),
+    billing: (String(row.billing_type ?? "UNKNOWN") as import("./types").BillingType) || "UNKNOWN",
+    availability: (String(row.availability ?? "UNKNOWN") as import("./types").Availability) || "UNKNOWN",
+    costKnown: Boolean(row.cost_known),
+    monetaryFree: Boolean(row.monetary_free),
+    inputPerMtok: row.cost_input == null ? null : Number(row.cost_input),
+    outputPerMtok: row.cost_output == null ? null : Number(row.cost_output),
+    reasoning: Boolean(row.reasoning),
+    tools: Boolean(row.tools),
+    vision: Boolean(row.vision),
+    contextLimit: row.context_limit == null ? null : Number(row.context_limit),
+    health: row.health == null ? 1 : Number(row.health),
+    quotaPressure: null,
+  }))
 }
 
 export function countRoutes(store: Store): number {

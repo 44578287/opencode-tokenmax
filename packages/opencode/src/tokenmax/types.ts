@@ -65,6 +65,8 @@ export interface TokenMaxWorker {
   provider: string
   model: string
   variant: string
+  billing?: string
+  progress?: string
   state: "queued" | "running" | "completed" | "failed" | "cancelled"
   startedAt: string | null
   completedAt: string | null
