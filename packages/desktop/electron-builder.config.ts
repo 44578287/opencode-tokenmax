@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
 import type { Configuration } from "electron-builder"
+import { APP_IDS, APP_NAMES, PROTOCOL_SCHEMES } from "./identity"
 
 const execFileAsync = promisify(execFile)
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
@@ -36,11 +37,7 @@ const channel = (() => {
   return "dev"
 })()
 
-const APP_IDS = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
-} as const
+const CHANNEL_APP_IDS = APP_IDS
 
 const getBase = (appId: string): Configuration => ({
   artifactName: "opencode-desktop-${os}-${arch}.${ext}",
@@ -120,7 +117,7 @@ const getBase = (appId: string): Configuration => ({
 })
 
 function getConfig() {
-  const appId = APP_IDS[channel]
+  const appId = CHANNEL_APP_IDS[channel]
   const base = getBase(appId)
 
   switch (channel) {
@@ -128,9 +125,16 @@ function getConfig() {
       return {
         ...base,
         appId,
-        productName: "OpenCode Dev",
+        productName: APP_NAMES.dev,
+        artifactName: "opencode-tokenmax-dev-${os}-${arch}.${ext}",
+        protocols: { name: APP_NAMES.dev, schemes: [PROTOCOL_SCHEMES.dev] },
+        nsis: {
+          ...base.nsis,
+          shortcutName: APP_NAMES.dev,
+          uninstallDisplayName: APP_NAMES.dev,
+        },
         deb: { fpm: [metainfoFpm(appId)] },
-        rpm: { packageName: "opencode-dev", fpm: [metainfoFpm(appId)] },
+        rpm: { packageName: "opencode-tokenmax-dev", fpm: [metainfoFpm(appId)] },
       }
     }
     case "beta": {

@@ -4,7 +4,7 @@ import type { Configuration } from "electron-builder"
 const legacyDesktopEntry = "resources/linux/opencode-desktop.desktop"
 
 const channels = [
-  { channel: "dev", appId: "ai.opencode.desktop.dev" },
+  { channel: "dev", appId: "ai.opencode.tokenmax.dev" },
   { channel: "beta", appId: "ai.opencode.desktop.beta" },
   { channel: "prod", appId: "ai.opencode.desktop" },
 ] as const
@@ -21,6 +21,11 @@ for (const channel of channels) {
     else process.env.OPENCODE_CHANNEL = previous
 
     expect(config.appId).toBe(channel.appId)
+    if (channel.channel === "dev") {
+      expect(config.productName).toBe("OpenCode TokenMax Dev")
+      expect(config.protocols).toEqual({ name: "OpenCode TokenMax Dev", schemes: ["opencode-tokenmax"] })
+      expect(config.artifactName).toBe("opencode-tokenmax-dev-${os}-${arch}.${ext}")
+    }
     expect(config.extraMetadata?.desktopName).toBe(`${channel.appId}.desktop`)
     expect(config.linux?.executableName).toBe(channel.appId)
     expect(config.linux?.desktop?.entry?.StartupWMClass).toBe(channel.appId)

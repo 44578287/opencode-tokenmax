@@ -58,6 +58,9 @@ jobs:
       - name: Run TokenMax tests
         working-directory: packages/opencode
         run: bun test test/tokenmax
+      - name: Run TokenMax Dev isolation tests
+        working-directory: packages/desktop
+        run: bun test src/main/profile.test.ts electron-builder.config.test.ts
 
   desktop-windows:
     name: desktop-windows
@@ -85,7 +88,7 @@ jobs:
       - name: Upload Windows Desktop artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opencode-desktop-windows
+          name: opencode-tokenmax-dev-windows
           path: |
             packages/desktop/dist/*.exe
             packages/desktop/dist/*.yml
