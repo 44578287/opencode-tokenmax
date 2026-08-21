@@ -34,9 +34,11 @@ $officialUninstall = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\
 New-Item -Path $officialUninstall -Force | Out-Null
 New-ItemProperty -Path $officialUninstall -Name "DisplayName" -Value "OpenCode" -Force | Out-Null
 $protocolKey = "HKCU:\Software\Classes\opencode"
-if (-not (Test-Path $protocolKey)) {
-  New-Item -Path $protocolKey -Force | Out-Null
+if (-not (Test-Path "$protocolKey\shell\open\command")) {
+  New-Item -Path "$protocolKey\shell\open\command" -Force | Out-Null
   New-ItemProperty -Path $protocolKey -Name "(default)" -Value "URL:OpenCode Official Stub" -Force | Out-Null
+  New-ItemProperty -Path $protocolKey -Name "URL Protocol" -Value "" -Force | Out-Null
+  New-ItemProperty -Path "$protocolKey\shell\open\command" -Name "(default)" -Value "`"$officialExe`" `"%1`"" -Force | Out-Null
 }
 
 Write-Host "Installing TokenMax Dev silently..."
