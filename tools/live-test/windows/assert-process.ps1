@@ -1,4 +1,4 @@
-param([int]$Seconds = 5)
+﻿param([int]$Seconds = 5)
 . "$PSScriptRoot\common.ps1"
 $samples = @()
 for ($i = 0; $i -lt $Seconds; $i++) {

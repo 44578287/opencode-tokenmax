@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$Password = "live-test-local-password",
   [int]$Port = 18789,
   [string]$Workspace = "C:\Users\g9964\Documents\opencode-tokenmax"

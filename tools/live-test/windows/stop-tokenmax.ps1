@@ -1,4 +1,4 @@
-. "$PSScriptRoot\common.ps1"
+﻿. "$PSScriptRoot\common.ps1"
 Get-TokenMaxProcesses | ForEach-Object {
   Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
 }

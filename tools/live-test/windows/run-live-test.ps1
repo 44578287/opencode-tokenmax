@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Continue"
+﻿$ErrorActionPreference = "Continue"
 . "$PSScriptRoot\common.ps1"
 . "$PSScriptRoot\api.ps1"
 

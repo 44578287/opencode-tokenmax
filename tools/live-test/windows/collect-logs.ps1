@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$OutDir)
+﻿param([Parameter(Mandatory=$true)][string]$OutDir)
 . "$PSScriptRoot\common.ps1"
 Assert-NotOfficialPath $OutDir
 $dest = Join-Path $OutDir "logs"

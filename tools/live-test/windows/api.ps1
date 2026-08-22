@@ -1,4 +1,4 @@
-. "$PSScriptRoot\common.ps1"
+﻿. "$PSScriptRoot\common.ps1"
 
 function Invoke-Sut([string]$Method, [string]$Path, $Body = $null, $Auth) {
   $headers = Get-BasicAuthHeader $Auth.username $Auth.password

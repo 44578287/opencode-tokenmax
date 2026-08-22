@@ -1,4 +1,4 @@
-$script:InstallDirCandidates = @(
+﻿$script:InstallDirCandidates = @(
   (Join-Path $env:LOCALAPPDATA "Programs\OpenCode TokenMax Dev"),
   (Join-Path $env:LOCALAPPDATA "Programs\opencode-tokenmax-dev")
 )

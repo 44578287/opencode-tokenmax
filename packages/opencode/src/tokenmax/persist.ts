@@ -157,7 +157,21 @@ export function openStore(opts: { dataDir: string; configDir?: string }): Store 
   }
   if (opts.configDir) {
     const oldPath = pluginDbPath(opts.configDir)
-    if (fs.existsSync(oldPath)) importPluginDb(db, opts.dataDir, oldPath)
+    if (fs.existsSync(oldPath)) {
+      try {
+        importPluginDb(db, opts.dataDir, oldPath)
+      } catch (err) {
+        // A legacy plugin DB migration failure must never prevent the native
+        // store from opening - the store is fully usable without imported
+        // history. Record the failure once so it's diagnosable, then continue.
+        try {
+          setMeta(db, "imported_plugin_error", err instanceof Error ? err.message : String(err))
+          setMeta(db, "imported_plugin_error_at", new Date().toISOString())
+        } catch {
+          // meta write failing too is not fatal - store still opens.
+        }
+      }
+    }
   }
   return {
     db,
@@ -206,9 +220,21 @@ export function importPluginDb(db: SqliteDb, dataDir: string, oldPath: string): 
         `)
       }
     }
+    // Legacy plugin DBs came from many earlier schema versions (columns were
+    // added/renamed across iterations). A table existing does not guarantee
+    // every column referenced in `sql` exists in THIS particular old DB, so
+    // each table is copied independently: one table's schema drift must
+    // never abort the whole import (or, worse, prevent the fingerprint from
+    // ever being recorded and force a re-attempt on every future store open).
+    const skipped: string[] = []
     const copyIf = (table: string, sql: string) => {
       const exists = db.query("SELECT name FROM old.sqlite_master WHERE type='table' AND name=?").get(table)
-      if (exists) db.exec(sql)
+      if (!exists) return
+      try {
+        db.exec(sql)
+      } catch {
+        skipped.push(table)
+      }
     }
     copyIf(
       "route_capabilities",
@@ -243,6 +269,7 @@ export function importPluginDb(db: SqliteDb, dataDir: string, oldPath: string): 
     const migrated = (db.query("SELECT COUNT(*) AS n FROM routes").get() as { n: number }).n
     setMeta(db, "imported_plugin_fingerprint", fp)
     setMeta(db, "imported_plugin_at", new Date().toISOString())
+    if (skipped.length > 0) setMeta(db, "imported_plugin_skipped_tables", skipped.join(","))
     return { imported: true, oldRecords, migrated }
   } finally {
     db.exec("DETACH DATABASE old")
