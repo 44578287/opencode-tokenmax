@@ -32,6 +32,7 @@ import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { isEmptyCompletion } from "./empty-completion"
+import { isPersistableUserPart } from "./user-parts"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
@@ -1051,6 +1052,18 @@ const layer = Layer.effect(
       }
       const persistable: typeof parts = []
       for (const [index, part] of parts.entries()) {
+        if (!isPersistableUserPart(part)) {
+          yield* Effect.logError("invalid user part before save", {
+            sessionID: input.sessionID,
+            messageID: info.id,
+            partID: part.id,
+            partType: part.type,
+            index,
+            cause: "missing subtask identity fields",
+            part,
+          })
+          continue
+        }
         const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
         if (Exit.isSuccess(p)) {
           persistable.push(part)

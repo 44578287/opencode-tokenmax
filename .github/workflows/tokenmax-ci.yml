@@ -58,6 +58,9 @@ jobs:
       - name: Run TokenMax tests
         working-directory: packages/opencode
         run: bun test test/tokenmax
+      - name: First-turn stall regression
+        working-directory: packages/opencode
+        run: bun test test/tokenmax/first-turn.test.ts test/tokenmax/empty-completion.test.ts
       - name: Run TokenMax Dev isolation tests
         working-directory: packages/desktop
         run: bun test src/main/profile.test.ts electron-builder.config.test.ts
