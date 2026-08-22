@@ -16,6 +16,7 @@ export { status } from "./snapshot"
 export * as Commands from "./commands"
 export * from "./policy"
 export * from "./plan"
+export * from "./catalog-sync"
 export * from "./context"
 export * from "./workers"
 

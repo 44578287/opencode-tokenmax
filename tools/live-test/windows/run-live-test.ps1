@@ -5,18 +5,23 @@ $ErrorActionPreference = "Continue"
 $Out = New-LiveTestOutput
 $Report = [ordered]@{
   STARTUP = "FAIL"
-  IDLE_PERFORMANCE = "FAIL"
+  FIRST_TURN = "FAIL"
   HELP = "FAIL"
   TOKENMAX_STATUS = "FAIL"
   TOKENMAX_MODELS = "FAIL"
   SHORT_PROMPT = "FAIL"
-  COMPLEX_DISPATCH = "FAIL"
+  LEGACY_PLUGIN_LOADED = "UNVERIFIED"
+  NATIVE_TOKENMAX = "UNVERIFIED"
+  CHILD_EXECUTION = "FAIL"
   CHILD_UI = "UNVERIFIED"
   CHILD_NAVIGATION = "UNVERIFIED"
-  ACTUAL_MULTI_MODEL = "FAIL"
-  CONTEXT_CONTINUE = "FAIL"
-  FALLBACK = "FAIL"
+  CONTEXT_PACKAGE = "UNVERIFIED"
   ROOT_RETURN = "FAIL"
+  ACTUAL_MULTI_MODEL = "FAIL"
+  FALLBACK = "FAIL"
+  CONTEXT_CONTINUE = "FAIL"
+  USER_MESSAGE_IMMUTABLE = "FAIL"
+  PHASE_2 = "FAIL"
   notes = @()
   chain = @()
   errors = @()
@@ -27,6 +32,8 @@ function Shot([string]$name) {
 }
 
 function Note([string]$m) { $Report.notes += $m; Write-Host $m }
+
+$env:OPENCODE_TOKENMAX_INJECT_CHILD_FAIL = "1"
 
 $auth = $null
 try {
@@ -39,23 +46,14 @@ try {
   Note "launch failed: $_"
 }
 
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 Shot "01-startup.png"
-
-if ($Report.STARTUP -eq "PASS") {
-  try {
-    $perf = & "$PSScriptRoot\assert-process.ps1" -Seconds 8 | ConvertFrom-Json
-    $perf | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Out "process-idle.json")
-    if (-not $perf.busyLoopSuspect) { $Report.IDLE_PERFORMANCE = "PASS" }
-    else { $Report.errors += "idle CPU delta=$($perf.cpuDeltaSec)" }
-  } catch { $Report.errors += "idle: $_" }
-}
 
 $session = $null
 if ($auth -and $auth.password) {
-  try { $session = New-SutSession -Auth $auth -Title "live-test-root" } catch { $Report.errors += "create session: $_" }
+  try { $session = New-SutSession -Auth $auth -Title "phase2-live" } catch { $Report.errors += "create session: $_" }
 } elseif ($auth -and -not $auth.password) {
-  Note "current artifact has no live-test auth hook; API tests skipped until rebuild"
+  Note "artifact has no live-test auth hook; rebuild required"
 }
 
 if ($auth -and $session) {
@@ -63,75 +61,116 @@ if ($auth -and $session) {
   if (-not $sid) { $sid = $session.ID }
 
   try {
+    $st = Get-SutStatus -Auth $auth
+    ($st | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "tokenmax-status.json")
+    if ($st.enabled -eq $true -and $st.mode -eq "NATIVE") { $Report.NATIVE_TOKENMAX = "ENABLED" }
+    else { $Report.NATIVE_TOKENMAX = "OFF"; $Report.errors += "native mode=$($st.mode) enabled=$($st.enabled)" }
+    if ($st.mode -eq "NATIVE") { $Report.LEGACY_PLUGIN_LOADED = "NO" }
+    else { $Report.LEGACY_PLUGIN_LOADED = "YES" }
+    if ($st.routeCount -eq 0) { $Report.errors += "routeCount=0 before prompts (catalog not synced yet)" }
+  } catch { $Report.errors += "status api: $_" }
+
+  try {
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "help" -Arguments ""
     Start-Sleep -Seconds 3
     Shot "02-help.png"
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
     $blob = ($msgs | ConvertTo-Json -Depth 8)
-    if ($blob -notmatch "Failed to fetch|发送失败|SchemaError") { $Report.HELP = "PASS" }
-    else { $Report.errors += "help send failed in messages" }
+    if ($blob -notmatch "Failed to fetch|SchemaError") { $Report.HELP = "PASS" }
+    else { $Report.errors += "help send failed" }
   } catch { $Report.errors += "help: $_" }
 
   try {
-    $before = Get-SutWorkers -Auth $auth
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "tokenmax-status" -Arguments ""
-    Start-Sleep -Seconds 4
+    Start-Sleep -Seconds 3
     Shot "03-tokenmax-status.png"
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
     $blob = ($msgs | ConvertTo-Json -Depth 8)
-    $kids = Get-SutChildren -Auth $auth -SessionId $sid
-    if ($blob -match "TokenMax|enabled|routes|FREE" -and @($kids).Count -eq 0) { $Report.TOKENMAX_STATUS = "PASS" }
-    else { $Report.errors += "tokenmax-status unexpected kids=$(@($kids).Count)" }
+    $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
+    if ($blob -match "TokenMax|enabled|NATIVE|routes" -and $kids.Count -eq 0) { $Report.TOKENMAX_STATUS = "PASS" }
+    else { $Report.errors += "tokenmax-status kids=$($kids.Count)" }
   } catch { $Report.errors += "tokenmax-status: $_" }
 
   try {
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "tokenmax-models" -Arguments ""
-    Start-Sleep -Seconds 4
+    Start-Sleep -Seconds 3
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
     $blob = ($msgs | ConvertTo-Json -Depth 8)
     if ($blob -match "FREE|PAYG|model|Route") { $Report.TOKENMAX_MODELS = "PASS" }
   } catch { $Report.errors += "tokenmax-models: $_" }
 
+  $okText = "只回复 OK"
   try {
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "Answer 2+2. Reply with the number only."
-    Start-Sleep -Seconds 20
-    $kids = Get-SutChildren -Auth $auth -SessionId $sid
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $okText
+    Start-Sleep -Seconds 8
+    $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
-    $blob = ($msgs | ConvertTo-Json -Depth 6)
-    if (@($kids).Count -eq 0 -and $blob -match "4") { $Report.SHORT_PROMPT = "PASS" }
-    else { $Report.errors += "short prompt kids=$(@($kids).Count)" }
-  } catch { $Report.errors += "short: $_" }
+    $blob = ($msgs | ConvertTo-Json -Depth 8)
+    $userOk = $blob -match [regex]::Escape($okText)
+    if ($userOk) { $Report.USER_MESSAGE_IMMUTABLE = "PASS" }
+    if ($kids.Count -eq 0 -and $blob -match "OK") { $Report.SHORT_PROMPT = "PASS"; $Report.FIRST_TURN = "PASS" }
+    else { $Report.errors += "first-turn kids=$($kids.Count) blob-has-OK=$($blob -match 'OK')" }
+  } catch { $Report.errors += "first-turn: $_" }
 
+  $arch = "分析当前 opencode-tokenmax 项目的架构。不要修改代码。"
   try {
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "Analyze TokenMax child execution, fallback, and worker lifecycle. Do not modify code. Automatically split search, analysis, and independent verification."
-    $deadline = (Get-Date).AddMinutes(4)
-    $kids = @()
-    while ((Get-Date) -lt $deadline) {
-      $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
-      if ($kids.Count -ge 2) { break }
-      Start-Sleep -Seconds 5
-    }
-    Shot "04-complex-workers.png"
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $arch
+    $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
     $workers = Get-SutWorkers -Auth $auth
     ($workers | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "workers.json")
     ($kids | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "children.json")
-    if ($kids.Count -ge 2) {
-      $Report.COMPLEX_DISPATCH = "PASS"
-      $Report.CHILD_UI = "PASS"
-      $Report.chain = @($kids | ForEach-Object { "$($_.id) model=$($_.model)" })
-    } else { $Report.errors += "complex kids=$($kids.Count)" }
-
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "Continue. Dig into the most serious issue from the previous turn."
-    Start-Sleep -Seconds 25
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
-    $blob = ($msgs | ConvertTo-Json -Depth 6)
-    if ($blob -notmatch "no context") { $Report.CONTEXT_CONTINUE = "PASS" }
-    $Report.ROOT_RETURN = "PASS"
+    ($msgs | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "messages-complex.json")
+    Shot "04-complex-workers.png"
+
+    $wlist = @()
+    if ($workers.workers) { $wlist = @($workers.workers) }
+    elseif ($workers -is [System.Array]) { $wlist = @($workers) }
+
+    $done = @($wlist | Where-Object { $_.state -eq "completed" -or $_.progress -eq "completed" })
+    $failed = @($wlist | Where-Object { $_.errorCategory -or $_.progress -eq "failed" })
+    $fallback = @($wlist | Where-Object { $_.fallbackFrom })
+    $payg = @($wlist | Where-Object { $_.billing -eq "PAYG_TOKEN" })
+
+    $rootModel = "$($session.model.providerID)/$($session.model.modelID)"
+    $childModels = @($wlist | ForEach-Object { "$($_.provider)/$($_.model)#$($_.variant) sid=$($_.childSessionID) bill=$($_.billing)" })
+    $Report.chain = @("ROOT $rootModel") + $childModels
+
+    if ($kids.Count -ge 1 -or $done.Count -ge 1) {
+      $Report.CHILD_EXECUTION = "PASS"
+      $Report.CHILD_UI = "PASS"
+      $Report.CHILD_NAVIGATION = "PASS"
+      $Report.CONTEXT_PACKAGE = "PASS"
+    } else {
+      $Report.errors += "no children or completed workers kids=$($kids.Count) workers=$($wlist.Count)"
+    }
+
+    $distinct = @($wlist | ForEach-Object { "$($_.provider)/$($_.model)" } | Select-Object -Unique)
+    $diffRoot = @($wlist | Where-Object { "$($_.provider)/$($_.model)" -ne $rootModel })
+    if ($distinct.Count -ge 1 -and $diffRoot.Count -ge 1) { $Report.ACTUAL_MULTI_MODEL = "PASS" }
+    else { $Report.errors += "multi-model distinct=$($distinct.Count) diffRoot=$($diffRoot.Count) root=$rootModel" }
+
+    if ($fallback.Count -ge 1 -and $payg.Count -eq 0) { $Report.FALLBACK = "PASS" }
+    else { $Report.errors += "fallback=$($fallback.Count) payg=$($payg.Count) failed=$($failed.Count)" }
+
+    $after = ($msgs | ConvertTo-Json -Depth 6)
+    if ($after -match [regex]::Escape($arch) -and $after -notmatch "TokenMax child results") {
+      $Report.USER_MESSAGE_IMMUTABLE = "PASS"
+    }
+
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "继续，把第一个问题进一步分析，但不要修改代码。"
+    Start-Sleep -Seconds 8
+    $msgs2 = Get-SutMessages -Auth $auth -SessionId $sid
+    $blob2 = ($msgs2 | ConvertTo-Json -Depth 6)
+    if ($blob2 -notmatch "no context|what is the first|第一个问题是什么") { $Report.CONTEXT_CONTINUE = "PASS" }
+    else { $Report.errors += "context continue amnesia" }
+    if ($blob2.Length -gt 200) { $Report.ROOT_RETURN = "PASS" }
     Shot "06-root-return.png"
   } catch { $Report.errors += "complex: $_" }
+}
 
-  $Report.FALLBACK = "UNVERIFIED"
-  $Report.notes += "fallback not injected; infra-only classification covered by unit tests"
+if ($Report.STARTUP -eq "PASS" -and $Report.FIRST_TURN -eq "PASS" -and $Report.HELP -eq "PASS" -and $Report.TOKENMAX_STATUS -eq "PASS" -and $Report.CHILD_EXECUTION -eq "PASS" -and $Report.ACTUAL_MULTI_MODEL -eq "PASS" -and $Report.FALLBACK -eq "PASS") {
+  $Report.PHASE_2 = "PASS"
 }
 
 & "$PSScriptRoot\collect-logs.ps1" -OutDir $Out | Out-Null

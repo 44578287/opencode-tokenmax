@@ -9,6 +9,8 @@ import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
+import { syncCatalog } from "@/tokenmax/catalog-sync"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
@@ -1114,6 +1116,16 @@ const layer = Layer.effect(
         const originalText = userText
         const hasSub = message.parts.some((p) => p.type === "subtask")
         const policy = loadPolicy(Global.Path.config)
+        const providers = yield* provider.list()
+        const auths = yield* Auth.Service.pipe(
+          Effect.flatMap((auth) => auth.all()),
+          Effect.orElseSucceed(() => ({}) as Record<string, { type?: string }>),
+        )
+        try {
+          syncCatalog(tokenmaxStore(), Object.values(providers), auths, cfg)
+        } catch (err) {
+          yield* Effect.logError("tokenmax catalog sync failed", { error: err })
+        }
         const routes = rowsToRoutes(listRoutes(tokenmaxStore()))
         const jobs = planJobs({
           text: userText,
@@ -1145,6 +1157,7 @@ const layer = Layer.effect(
           })
           const db = tokenmaxStore().db
           const skipKeys: string[] = []
+          let injectedChildFail = false
           for (const phase of groupPhases(jobs, policy)) {
             yield* Effect.forEach(
               phase,
@@ -1153,9 +1166,33 @@ const layer = Layer.effect(
                   let current = job
                   let attempts = 0
                   const workerId = ulid()
-                  while (attempts < policy.fallback.maxAttempts) {
-                    attempts++
-                    upsertWorker(db, {
+                   while (attempts < policy.fallback.maxAttempts) {
+                     attempts++
+                     if (process.env.OPENCODE_TOKENMAX_INJECT_CHILD_FAIL === "1" && attempts === 1 && !injectedChildFail) {
+                       injectedChildFail = true
+                       skipKeys.push(current.decision.key)
+                       const next = fallbackJob(current, { routes, policy, skipKeys })
+                       upsertWorker(db, {
+                         id: workerId,
+                         parentSessionID: input.sessionID,
+                         childSessionID: "",
+                         role: current.role,
+                         provider: current.decision.provider,
+                         model: current.decision.model,
+                         variant: current.decision.variant,
+                         billing: current.decision.billing,
+                         progress: "failed",
+                         state: next ? "running" : "failed",
+                         startedAt: new Date().toISOString(),
+                         completedAt: next ? null : new Date().toISOString(),
+                         fallbackFrom: null,
+                         errorCategory: classifyError("injected provider error 429"),
+                       })
+                       if (!next) return
+                       current = next
+                       continue
+                     }
+                     upsertWorker(db, {
                       id: workerId,
                       parentSessionID: input.sessionID,
                       childSessionID: "",

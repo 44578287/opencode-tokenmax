@@ -55,6 +55,20 @@ const routes: Route[] = [
 ]
 
 describe("tokenmax phase2 plan", () => {
+  test("Chinese architecture prompt spawns workers", () => {
+    const jobs = planJobs({
+      text: "分析当前 opencode-tokenmax 项目的架构。不要修改代码。",
+      routes,
+      policy: POLICY_SEED,
+      enabled: true,
+      hasExistingSubtasks: false,
+      isChildSession: false,
+    })
+    expect(jobs.length).toBeGreaterThan(0)
+    expect(jobs.some((j) => j.role === "search")).toBe(true)
+    expect(jobs.some((j) => j.role === "verify")).toBe(true)
+  })
+
   test("simple task does not spawn workers", () => {
     const policy = POLICY_SEED
     const c = classifyText("hi", policy)
@@ -194,10 +208,10 @@ describe("tokenmax phase2 policy hot reload", () => {
     fs.writeFileSync(policyPath(dir), "{not json")
     const second = loadPolicy(dir)
     expect(second.scoring.missPenalty).toBe(first.scoring.missPenalty)
-    fs.writeFileSync(
-      policyPath(dir),
-      JSON.stringify({ ...first, scoring: { ...first.scoring, missPenalty: 9 } }, null, 2),
-    )
+    const updated = policyPath(dir)
+    fs.writeFileSync(updated, JSON.stringify({ ...first, scoring: { ...first.scoring, missPenalty: 9 } }, null, 2))
+    const later = new Date(Date.now() + 2000)
+    fs.utimesSync(updated, later, later)
     const third = loadPolicy(dir)
     expect(third.scoring.missPenalty).toBe(9)
     resetPolicyCache()

@@ -7,7 +7,9 @@ function Invoke-Sut([string]$Method, [string]$Path, $Body = $null, $Auth) {
     $sep = if ($Path.Contains("?")) { "&" } else { "?" }
     $uri = "$uri${sep}directory=$([uri]::EscapeDataString($script:Workspace))"
   }
-  $params = @{ Uri = $uri; Method = $Method; Headers = $headers; TimeoutSec = 120 }
+  $timeout = 120
+  if ($Method -eq "POST" -and $Path -match "/message$") { $timeout = 600 }
+  $params = @{ Uri = $uri; Method = $Method; Headers = $headers; TimeoutSec = $timeout }
   if ($null -ne $Body) {
     $params.ContentType = "application/json"
     $params.Body = ($Body | ConvertTo-Json -Depth 8 -Compress)
