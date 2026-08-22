@@ -11,8 +11,8 @@ function Invoke-Sut([string]$Method, [string]$Path, $Body = $null, $Auth) {
   if ($Method -eq "POST" -and $Path -match "/message$") { $timeout = 600 }
   $params = @{ Uri = $uri; Method = $Method; Headers = $headers; TimeoutSec = $timeout }
   if ($null -ne $Body) {
-    $params.ContentType = "application/json"
-    $params.Body = ($Body | ConvertTo-Json -Depth 8 -Compress)
+    $params.ContentType = "application/json; charset=utf-8"
+    $params.Body = [Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 8 -Compress))
   }
   return Invoke-RestMethod @params
 }

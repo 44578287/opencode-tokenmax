@@ -58,9 +58,12 @@ import { store as tokenmaxStore } from "@/tokenmax"
 import { loadPolicy } from "@/tokenmax/policy"
 import { planJobs, groupPhases, fallbackJob } from "@/tokenmax/plan"
 import { buildContextPackage, childPrompt } from "@/tokenmax/context"
-import { upsertWorker } from "@/tokenmax/workers"
+import { upsertWorker, listWorkers } from "@/tokenmax/workers"
 import { listRoutes, rowsToRoutes } from "@/tokenmax/persist"
 import { classifyError } from "@/tokenmax/error"
+import { assistantText, evaluateCompletionGate, fallbackRoute } from "@/tokenmax/completion-gate"
+import { recordCapability } from "@/tokenmax/capability"
+import { recordEvent } from "@/tokenmax/telemetry"
 import { Global } from "@opencode-ai/core/global"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -1304,6 +1307,10 @@ const layer = Layer.effect(
         let structured: unknown
         let step = 0
         let emptyAttempts = 0
+        let earlyStops = 0
+        let resumeAfterGate = false
+        let completionInstruction: string | undefined
+        let rootFallback: { providerID: string; modelID: string; variant?: string } | undefined
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1330,11 +1337,59 @@ const layer = Layer.effect(
             ) ?? false
 
           if (
+            !resumeAfterGate &&
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
             lastAssistant.parentID === lastUser.id
           ) {
+            if (tokenmaxEnabled(yield* config.get()) && !session.parentID) {
+              const route = `${lastAssistant.providerID}/${lastAssistant.modelID}${lastAssistant.variant ? `#${lastAssistant.variant}` : ""}`
+              const tokenmax = tokenmaxStore()
+              const gate = evaluateCompletionGate({
+                assistantText: assistantText(lastAssistantMsg?.parts ?? []),
+                toolCalls: hasToolCalls,
+                workers: listWorkers(tokenmax.db, sessionID),
+                earlyStops,
+              })
+              if (gate.state === "INCOMPLETE") {
+                earlyStops += 1
+                recordEvent(tokenmax, "completion_gate_blocked", route, { reason: gate.reason, earlyStops })
+                recordCapability(tokenmax, {
+                  providerId: lastAssistant.providerID,
+                  modelId: lastAssistant.modelID,
+                  variant: lastAssistant.variant,
+                  taskClass: "completion_reliability",
+                  ok: false,
+                  errorCategory: "CAPABILITY_FAILURE",
+                })
+                if (gate.action === "root_fallback") {
+                  const next = fallbackRoute(rowsToRoutes(listRoutes(tokenmax)), lastUser.model)
+                  if (next) {
+                    rootFallback = { providerID: next.providerId, modelID: next.modelId, variant: next.variant || undefined }
+                    recordEvent(tokenmax, "root_early_stop_fallback", route, {
+                      earlyStops,
+                      fallback: `${next.providerId}/${next.modelId}${next.variant ? `#${next.variant}` : ""}`,
+                    })
+                  } else {
+                    recordEvent(tokenmax, "root_early_stop_fallback_unavailable", route, { earlyStops })
+                  }
+                }
+                completionInstruction = gate.instruction
+                resumeAfterGate = true
+                yield* Effect.logWarning("completion gate continuing root run", { "session.id": sessionID, reason: gate.reason, earlyStops })
+                continue
+              }
+              if (gate.state === "FAILED") {
+                const error = new NamedError.Unknown({
+                  message: "Root model stopped repeatedly without executing its declared work",
+                }).toObject()
+                lastAssistant.error = error
+                yield* sessions.updateMessage(lastAssistant)
+                yield* events.publish(Session.Event.Error, { sessionID, error })
+                break
+              }
+            }
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
@@ -1359,7 +1414,8 @@ const layer = Layer.effect(
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const modelRef = rootFallback ?? lastUser.model
+          const model = yield* getModel(modelRef.providerID as ProviderV2.ID, modelRef.modelID as ModelV2.ID, sessionID)
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
@@ -1404,13 +1460,16 @@ const layer = Layer.effect(
             Effect.provideService(Session.Service, sessions),
           )
 
+          const activeCompletionInstruction = completionInstruction
+          completionInstruction = undefined
+          resumeAfterGate = false
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
             parentID: lastUser.id,
             role: "assistant",
             mode: agent.name,
             agent: agent.name,
-            variant: lastUser.model.variant,
+            variant: modelRef.variant,
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1487,6 +1546,7 @@ const layer = Layer.effect(
               ...instructions,
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
+              ...(activeCompletionInstruction ? [activeCompletionInstruction] : []),
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
@@ -1603,12 +1663,17 @@ const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
-      if (TokenMaxCommands.isDeterministic(input.command, input.arguments)) {
+      if (TokenMaxCommands.isDeterministic(input.command, input.arguments) || input.command === "help") {
         const cfg = yield* config.get()
-        const text = TokenMaxCommands.render(input.command, {
-          store: tokenmaxStore(),
-          enabled: tokenmaxEnabled(cfg),
-        }).text
+        const text =
+          input.command === "help"
+            ? (yield* commands.list())
+                .map((command) => `/${command.name}${command.description ? ` - ${command.description}` : ""}`)
+                .join("\n")
+            : TokenMaxCommands.render(input.command, {
+                store: tokenmaxStore(),
+                enabled: tokenmaxEnabled(cfg),
+              }).text
         const user = yield* createUserMessage({
           sessionID: input.sessionID,
           messageID: input.messageID,

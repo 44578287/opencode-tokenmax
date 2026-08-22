@@ -1,10 +1,12 @@
 ﻿param(
   [string]$Password = "live-test-local-password",
   [int]$Port = 18789,
-  [string]$Workspace = "C:\Users\g9964\Documents\opencode-tokenmax"
+  [string]$Workspace = (Join-Path $env:TEMP "tokenmax-e2e-workspace")
 )
 . "$PSScriptRoot\common.ps1"
+$script:Workspace = $Workspace
 $script:Port = $Port
+Initialize-LiveTestWorkspace
 $exe = Get-TokenMaxExe
 Assert-NotOfficialPath $script:UserData
 
@@ -18,7 +20,7 @@ $env:OPENCODE_SERVER_PASSWORD = $Password
 $env:OPENCODE_LIVE_TEST = "1"
 $env:OPENCODE_TOKENMAX_SKIP_AUTH_IMPORT = "1"
 
-$proc = Start-Process -FilePath $exe -PassThru
+$proc = Start-Process -FilePath $exe -PassThru -WorkingDirectory $Workspace
 $deadline = (Get-Date).AddSeconds(45)
 $auth = $null
 $portUp = $false

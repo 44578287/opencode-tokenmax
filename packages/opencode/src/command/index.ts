@@ -47,6 +47,7 @@ export function hints(template: string) {
 }
 
 export const Default = {
+  HELP: "help",
   INIT: "init",
   REVIEW: "review",
 } as const
@@ -69,6 +70,14 @@ const layer = Layer.effect(
       const cfg = yield* config.get()
       const bridge = yield* EffectBridge.make()
       const commands: Record<string, Info> = {}
+
+      commands[Default.HELP] = {
+        name: Default.HELP,
+        description: "list available commands",
+        source: "command",
+        template: "List available commands.",
+        hints: [],
+      }
 
       commands[Default.INIT] = {
         name: Default.INIT,
