@@ -36,8 +36,11 @@ afterEach(() => {
 
 describe("TokenMax OperationManager", () => {
   test("GitHub Actions watcher is one long-lived event process, not an LLM poll loop", () => {
-    const command = githubWatchCommand("32500407070", "C:/work")
-    expect(command).toMatchObject({ command: "gh", args: ["run", "watch", "32500407070", "--exit-status"] })
+    const command = githubWatchCommand("32500407070", "C:/work", "44578287/opencode-tokenmax")
+    expect(command).toMatchObject({
+      command: "gh",
+      args: ["run", "watch", "32500407070", "--exit-status", "--repo", "44578287/opencode-tokenmax"],
+    })
   })
 
   test("direct process exit settles immediately even while output collection is independent", async () => {

@@ -268,13 +268,13 @@ export class OperationManager {
 
 export function startGitHubActionsOperation(
   manager: OperationManager,
-  input: Omit<Parameters<OperationManager["start"]>[0], "type"> & { runID: string },
+  input: Omit<Parameters<OperationManager["start"]>[0], "type" | "activeHandle"> & { runID: string },
 ) {
   return manager.start({ ...input, type: "GITHUB_ACTIONS", activeHandle: `gh-run:${input.runID}` })
 }
 
-export function githubWatchCommand(runID: string, cwd?: string) {
-  return ChildProcess.make("gh", ["run", "watch", runID, "--exit-status"], {
+export function githubWatchCommand(runID: string, cwd?: string, repo?: string) {
+  return ChildProcess.make("gh", ["run", "watch", runID, "--exit-status", ...(repo ? ["--repo", repo] : [])], {
     cwd,
     extendEnv: true,
     stdin: "ignore",
@@ -310,12 +310,13 @@ export const runGitHubActionsOperation = (input: {
   operation: TokenMaxOperation
   runID: string
   cwd?: string
+  repo?: string
 }) =>
   runProcessOperation({
     manager: input.manager,
     store: undefined,
     operation: input.operation,
-    command: githubWatchCommand(input.runID, input.cwd),
+    command: githubWatchCommand(input.runID, input.cwd, input.repo),
   })
 
 /**
