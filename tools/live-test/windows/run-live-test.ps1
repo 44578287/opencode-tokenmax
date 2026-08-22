@@ -13,6 +13,10 @@ function Wait-SutSettled($Auth, [string]$SessionId, [int]$Baseline, [int]$Timeou
     try {
       $msgs = @(Get-SutMessages -Auth $Auth -SessionId $SessionId)
       if ($msgs.Count -gt $Baseline) {
+        $lastAssistant = @($msgs | Where-Object { $_.info.role -eq "assistant" } | Select-Object -Last 1)
+        if ($lastAssistant.Count -gt 0 -and ($lastAssistant[0].info.error -or $lastAssistant[0].info.time.completed)) {
+          return ,@($msgs)
+        }
         $kids = @(Get-SutChildren -Auth $Auth -SessionId $SessionId)
         if ($kids.Count -eq 0) { return ,@($msgs) }
         $w = Get-SutWorkers -Auth $Auth
