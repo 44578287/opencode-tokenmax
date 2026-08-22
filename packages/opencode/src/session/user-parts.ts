@@ -3,6 +3,7 @@ export function isPersistableUserPart(part: {
   sessionID?: string
   messageID?: string
   type?: string
+  [key: string]: unknown
 }) {
   if (!part || typeof part !== "object") return false
   if (part.type === "subtask") {
