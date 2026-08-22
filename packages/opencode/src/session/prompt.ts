@@ -1122,7 +1122,7 @@ const layer = Layer.effect(
           Effect.orElseSucceed(() => ({}) as Record<string, { type?: string }>),
         )
         try {
-          syncCatalog(tokenmaxStore(), Object.values(providers), auths, cfg)
+          syncCatalog(tokenmaxStore(), Object.values(providers), auths)
         } catch (err) {
           yield* Effect.logError("tokenmax catalog sync failed", { error: err })
         }
