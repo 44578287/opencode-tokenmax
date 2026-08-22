@@ -290,55 +290,44 @@ describe("cross-spawn spawner", () => {
     //
     // Node's "close" event only fires once every stdio stream has closed.
     // If the spawned process backgrounds a grandchild that inherits
-    // stdout/stderr and outlives it, "exit" fires but "close" never does.
-    // exitCode/isRunning are governed purely by the real "close" event
-    // (byte-for-byte matching upstream - see the reverted spawn()-level
-    // grace timer, which caused a Windows CI regression by racing ahead of
-    // "close" for every normal process, not just this orphan case). The
-    // bounded exit-to-close grace fallback lives ONLY in spawnCommand's
-    // release(): a process that has already exited (hasExited()) but is
-    // still waiting on a lingering "close" gets a bounded wait instead of
-    // an unbounded Deferred.await when the Scope closes - this is what
-    // used to hang the tool-call timeout / leave the whole session BUSY.
+    // stdout/stderr and outlives it, "exit" fires but "close" never does -
+    // that used to hang exitCode/isRunning/release() forever (no bounded
+    // wait on "close" can distinguish "merely slow" from "will never come"
+    // without introducing a delay). The fix resolves everything from the
+    // "exit" event instead, which is immediate and requires no waiting,
+    // grace period, or timeout of any kind - the orphaned grandchild's
+    // pipes are irrelevant to it entirely.
     fx.effect(
-      "release() does not hang forever when a detached grandchild keeps stdio open past exit",
+      "exitCode/isRunning/release() resolve immediately from 'exit', never waiting on an orphaned grandchild's pipes",
       Effect.gen(function* () {
         if (process.platform === "win32") return // detached inherited-stdio grandchildren behave differently on Windows job objects
 
-        const previous = process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"]
-        process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"] = "200"
-        try {
-          const started = Date.now()
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              yield* js(
-                [
-                  "const cp = require('child_process')",
-                  // Grandchild inherits stdout/stderr and stays alive for
-                  // 3s, well past this test's timeout - if release()
-                  // waited for "close" naturally, this test would hang for
-                  // 3s instead of resolving via the ~200ms grace period.
-                  "const child = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] })",
-                  "child.unref()",
-                  // Exit the parent itself shortly after spawning, so its
-                  // own "exit" event has fired (hasExited()===true) before
-                  // the scope below closes and release() runs.
-                  "setTimeout(() => process.exit(0), 50)",
-                ].join("\n"),
-              )
-              // Give the parent's "exit" event a moment to actually fire
-              // before we close the scope and trigger release().
-              yield* Effect.sleep("150 millis")
-            }),
-          )
-          const elapsed = Date.now() - started
-          // Should resolve via the ~200ms grace period inside release(),
-          // not hang for the grandchild's full 3s lifetime.
-          expect(elapsed).toBeLessThan(2_500)
-        } finally {
-          if (previous === undefined) delete process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"]
-          else process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"] = previous
-        }
+        const started = Date.now()
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* js(
+              [
+                "const cp = require('child_process')",
+                // Grandchild inherits stdout/stderr and stays alive for 3s,
+                // well past this test's timeout - if anything here waited
+                // on "close" (even with a bounded grace period), this test
+                // would take that long. Nothing does: the parent exits
+                // immediately and its own "exit" event is all that's used.
+                "const child = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] })",
+                "child.unref()",
+              ].join("\n"),
+            )
+            const code = yield* handle.exitCode
+            expect(code).toBe(ChildProcessSpawner.ExitCode(0))
+            const running = yield* handle.isRunning
+            expect(running).toBe(false)
+          }),
+        )
+        const elapsed = Date.now() - started
+        // No delay/grace-period/timeout is involved anywhere in this path -
+        // total time should be pure process-spawn overhead, not anywhere
+        // near the grandchild's 3s lifetime.
+        expect(elapsed).toBeLessThan(1_000)
       }),
     )
   })

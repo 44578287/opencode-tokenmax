@@ -97,23 +97,41 @@ const toPlatformError = (
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
 
 /**
- * Node's ChildProcess "close" event only fires once every stdio stream has
- * closed. If the process backgrounds a grandchild that inherits stdout/
- * stderr (e.g. `some-daemon &` without redirecting output), those pipes can
- * stay open forever even though the process we actually spawned has already
- * exited ("exit" fires, "close" never does). Without this grace period the
- * spawner's ExitSignal Deferred never resolves, which hangs every consumer
- * of exitCode/isRunning forever - including the tool-call timeout in
- * process.ts, whose own Effect.timeout cannot rescue the caller because
- * enforcing it requires this same Deferred to settle during Scope close.
- * See TOKENMAX-ARCHITECTURE.md "Mid-run busy stall" for the incident this
- * fixes.
+ * The spawner's ExitSignal resolves from Node's "exit" event, not "close".
+ * "close" only fires once every stdio stream has closed - if the process
+ * backgrounds a grandchild that inherits stdout/stderr (e.g. `some-daemon &`
+ * without redirecting output), those pipes can stay open forever even
+ * though the process we actually spawned has already terminated ("exit"
+ * fires, "close" never does). Waiting on "close" hung every consumer of
+ * exitCode/isRunning forever in that case - including the tool-call timeout
+ * in process.ts, whose own Effect.timeout could not rescue the caller
+ * because enforcing it requires this same Deferred to settle during Scope
+ * close - and there is no bounded, delay-free way to distinguish "close is
+ * merely slow" from "close will never come" by waiting on it.
+ *
+ * "exit" is the OS-authoritative, immediate signal that the process itself
+ * is gone; it normally fires before (or in place of, if spawn failed)
+ * "close" ever would. stdout/stderr are read through their own independent
+ * stream pipelines (see setupOutput below, backed directly by
+ * proc.stdout/stderr), so resolving exitCode/isRunning/release() from
+ * "exit" instead of "close" never truncates or races any output a caller
+ * is still reading.
+ *
+ * One real-world case inverts this ordering: cross-spawn's Windows ENOENT
+ * emulation (used when the resolved command cannot be found) synthesizes
+ * "error" + "close" for a command that was never actually launched, and
+ * never emits "exit" at all - confirmed by direct probing of the
+ * `cross-spawn` package on this platform. Waiting on "exit" alone would
+ * hang forever for that case. Since both "exit" and "close" are real,
+ * immediate Node/OS events (never a timer), the ExitSignal is resolved
+ * from whichever of the two fires first - still fully event-driven and
+ * delay-free, just tolerant of either termination signal shape. Resolving
+ * from "close" when it wins the race is safe: it only wins when "exit"
+ * would never have fired anyway, so there is nothing to race it out of.
+ * This makes every consumer of the ExitSignal deterministic and immediate -
+ * no grace period, timeout, or delay of any kind. See TOKENMAX-ARCHITECTURE.md
+ * "Mid-run busy stall" for the incident this fixes.
  */
-function exitToCloseGraceMs() {
-  const v = Number(process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"])
-  return Number.isFinite(v) && v >= 0 ? v : 3_000
-}
-
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -283,38 +301,25 @@ export const make = Effect.gen(function* () {
   }
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
-    Effect.callback<
-      readonly [NodeChildProcess.ChildProcess, ExitSignal, hasExited: () => boolean],
-      PlatformError.PlatformError
-    >((resume) => {
+    Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
-      let end = false
-      // `exit` is only used to (a) expose hasExited() to callers that need
-      // to make a bounded-wait decision (see spawnCommand's release below)
-      // and (b) as a fallback value if "close" somehow fires without its
-      // own args. It intentionally does NOT force-resolve `signal` itself -
-      // exitCode/isRunning stay governed purely by the real "close" event,
-      // identical to upstream, so no consumer of this spawner (ripgrep,
-      // repository-cache, etc.) ever observes a different exit status than
-      // before. Only spawnCommand's release() opts into a bounded wait.
-      let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
-      const finish = (result: readonly [code: number | null, signal: NodeJS.Signals | null]) => {
-        if (end) return
-        end = true
-        Deferred.doneUnsafe(signal, Exit.succeed(result))
-      }
       proc.on("error", (err) => {
         resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
+      // Whichever of "exit"/"close" fires first resolves the signal;
+      // Deferred.doneUnsafe is a no-op once already completed, so the
+      // second event (if any) is simply ignored - no coordination beyond
+      // that is needed. See the module doc comment above for why both are
+      // listened to instead of "exit" alone.
       proc.on("exit", (...args) => {
-        exit = args
+        Deferred.doneUnsafe(signal, Exit.succeed(args))
       })
       proc.on("close", (...args) => {
-        finish(exit ?? args)
+        Deferred.doneUnsafe(signal, Exit.succeed(args))
       })
       proc.on("spawn", () => {
-        resume(Effect.succeed([proc, signal, () => exit !== undefined]))
+        resume(Effect.succeed([proc, signal]))
       })
       return Effect.sync(() => {
         proc.kill("SIGTERM")
@@ -411,32 +416,13 @@ export const make = Effect.gen(function* () {
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
             }),
-            Effect.fnUntraced(function* ([proc, signal, hasExited]) {
-              let done = yield* Deferred.isDone(signal)
-              if (!done && hasExited()) {
-                // The process has already exited (Node's "exit" event
-                // fired) and is just waiting on a slightly delayed "close"
-                // event - normal and harmless on a loaded machine. Wait
-                // passively (no signal sent, bounded by
-                // OPENCODE_TOKENMAX_EXIT_GRACE_MS) before concluding it
-                // needs to be killed, so we
-                // never send a spurious kill to an already-finished
-                // process - that would terminate it via signal, which
-                // surfaces as a false "interrupted" error to any caller
-                // still awaiting exitCode even though the command actually
-                // completed successfully. A process that hasn't exited
-                // yet (hasExited() === false) is genuinely still running,
-                // so it skips this wait and is killed immediately below,
-                // matching the original "kill on scope exit" behavior.
-                yield* Deferred.await(signal).pipe(
-                  Effect.timeoutOrElse({
-                    duration: `${exitToCloseGraceMs()} millis`,
-                    orElse: () => Effect.void,
-                  }),
-                  Effect.ignore,
-                )
-                done = yield* Deferred.isDone(signal)
-              }
+            Effect.fnUntraced(function* ([proc, signal]) {
+              // signal resolves from Node's "exit" event (see spawn()
+              // above), so this check is immediate and deterministic: a
+              // process that has already terminated is simply done, no
+              // wait required; a process for which "exit" has not fired
+              // yet is genuinely still running and is killed below.
+              const done = yield* Deferred.isDone(signal)
               const kill = timeout(proc, command, command.options)
               if (done) {
                 const [code] = yield* Deferred.await(signal)
