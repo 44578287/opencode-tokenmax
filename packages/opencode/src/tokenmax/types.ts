@@ -91,9 +91,14 @@ export interface TokenMaxProviderState {
 
 export interface TokenMaxStatus {
   enabled: boolean
+  mode: "NATIVE" | "LEGACY_PLUGIN" | "OFF"
   version: string
   dbPath: string
   routeCount: number
+  leftoverPlugins: string[]
+  leftoverAgents: string[]
+  leftoverCommands: string[]
+  strippedPlugins: string[]
   workers: TokenMaxWorker[]
 }
 

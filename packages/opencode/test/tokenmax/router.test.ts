@@ -85,7 +85,9 @@ describe("tokenmax quota", () => {
     expect(q.remainingConfidence).toBe(0)
     expect(getQuota(store, "missing").remaining).toBeNull()
     store.close()
-    fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
   })
 })
 
@@ -104,6 +106,8 @@ describe("tokenmax commands 0-LLM", () => {
     expect(isDeterministic("tokenmax-stats", "--analyze")).toBe(false)
     expect(wantsLlm("tokenmax-route", "--explain")).toBe(true)
     store.close()
-    fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
   })
 })

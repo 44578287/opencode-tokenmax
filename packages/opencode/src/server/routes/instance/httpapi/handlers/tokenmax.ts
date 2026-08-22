@@ -14,7 +14,7 @@ export const tokenmaxHandlers = HttpApiBuilder.group(InstanceHttpApi, "tokenmax"
     const getStatus = Effect.fn("TokenMaxHttpApi.status")(function* () {
       const cfg = yield* config.get()
       const s = store()
-      return { ...status(s, isEnabled(cfg)), llmRequests: 0 as const }
+      return { ...status(s, isEnabled(cfg), cfg), llmRequests: 0 as const }
     })
 
     const getModels = Effect.fn("TokenMaxHttpApi.models")(function* () {

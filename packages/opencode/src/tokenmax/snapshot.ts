@@ -1,11 +1,18 @@
 import { VERSION } from "./version"
 import { countRoutes, type Store } from "./persist"
 import type { TokenMaxStatus, TokenMaxWorker } from "./types"
+import { inspectTokenMax, type TokenMaxConfigSlice } from "./legacy"
 
-export function status(store: Store, enabled: boolean): TokenMaxStatus {
+export function status(store: Store, enabled: boolean, cfg?: TokenMaxConfigSlice | null): TokenMaxStatus {
+  const diag = inspectTokenMax(cfg ?? { experimental: { tokenmax: { enabled } } })
   const workers = store.db.query("SELECT * FROM workers").all() as Array<Record<string, string | null>>
   return {
     enabled,
+    mode: diag.mode,
+    leftoverPlugins: diag.leftoverPlugins,
+    leftoverAgents: diag.leftoverAgents,
+    leftoverCommands: diag.leftoverCommands,
+    strippedPlugins: diag.strippedPlugins,
     version: VERSION,
     dbPath: store.dbPath,
     routeCount: countRoutes(store),

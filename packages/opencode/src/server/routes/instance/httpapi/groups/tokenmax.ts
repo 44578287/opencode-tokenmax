@@ -24,9 +24,14 @@ const Worker = Schema.Struct({
 
 const Status = Schema.Struct({
   enabled: Schema.Boolean,
+  mode: Schema.Literals(["NATIVE", "LEGACY_PLUGIN", "OFF"]),
   version: Schema.String,
   dbPath: Schema.String,
   routeCount: Schema.Number,
+  leftoverPlugins: Schema.Array(Schema.String),
+  leftoverAgents: Schema.Array(Schema.String),
+  leftoverCommands: Schema.Array(Schema.String),
+  strippedPlugins: Schema.Array(Schema.String),
   workers: Schema.Array(Worker),
   llmRequests: Schema.Literal(0),
 }).annotate({ identifier: "TokenMaxStatus" })

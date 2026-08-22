@@ -49,6 +49,7 @@ function renderStatus(opts: { store: Store; enabled: boolean; dbPath?: string })
   return [
     "TokenMax Status",
     `enabled: ${opts.enabled}`,
+    `mode: ${opts.enabled ? "NATIVE" : "OFF"}`,
     `version: ${VERSION}`,
     `db: ${opts.dbPath ?? opts.store.dbPath}`,
     `routes: ${n}`,

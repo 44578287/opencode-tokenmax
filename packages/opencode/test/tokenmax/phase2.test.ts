@@ -179,7 +179,9 @@ describe("tokenmax phase2 workers lifecycle", () => {
     expect(list[0].childSessionID).toBe("ses_child")
     expect(list[0].parentSessionID).toBe("ses_root")
     store.close()
-    fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
   })
 })
 
@@ -199,7 +201,9 @@ describe("tokenmax phase2 policy hot reload", () => {
     const third = loadPolicy(dir)
     expect(third.scoring.missPenalty).toBe(9)
     resetPolicyCache()
-    fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
   })
 })
 

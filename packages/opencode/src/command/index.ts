@@ -111,6 +111,7 @@ const layer = Layer.effect(
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
+        if (tokenmaxEnabled(cfg) && name.startsWith("tokenmax-")) continue
         commands[name] = {
           name,
           agent: command.agent,

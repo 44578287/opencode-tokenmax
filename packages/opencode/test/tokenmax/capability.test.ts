@@ -16,7 +16,11 @@ function tmp() {
 }
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  for (const dir of dirs.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {}
+  }
 })
 
 describe("tokenmax capability", () => {

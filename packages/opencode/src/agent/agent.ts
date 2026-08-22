@@ -33,6 +33,7 @@ import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { loadPolicy } from "@/tokenmax/policy"
 import { POLICY_SEED } from "@/tokenmax/policy.seed"
+import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
 
 function tokenmaxWorkerPrompt(role: "search" | "exec" | "debug" | "verify") {
   try {
@@ -356,6 +357,7 @@ const layer = Layer.effect(
         }
 
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
+          if (tokenmaxEnabled(cfg) && key.startsWith("tokenmax-") && agents[key]?.native) continue
           if (value.disable) {
             delete agents[key]
             continue

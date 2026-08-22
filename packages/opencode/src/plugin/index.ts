@@ -33,6 +33,14 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
+import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
+import {
+  assertSafeStartup,
+  filterPluginList,
+  inspectTokenMax,
+  isLegacyTokenMaxPlugin,
+  pluginSpecString,
+} from "@/tokenmax/legacy"
 
 type State = {
   hooks: Hooks[]
@@ -178,9 +186,25 @@ const layer = Layer.effect(
           if (init._tag === "Some") hooks.push(init.value)
         }
 
-        const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
-        if (flags.pure && cfg.plugin_origins?.length) {
+        const nativeOn = tokenmaxEnabled(cfg)
+        const diag = inspectTokenMax(cfg)
+        yield* Effect.logInfo("TokenMax mode", {
+          mode: diag.mode,
+          leftoverPlugins: diag.leftoverPlugins,
+          leftoverAgents: diag.leftoverAgents,
+          leftoverCommands: diag.leftoverCommands,
+        })
+        const filtered = filterPluginList(flags.pure ? [] : (cfg.plugin_origins ?? []), nativeOn, (item) => item.spec)
+        if (filtered.stripped.length) {
+          yield* Effect.logWarning("TokenMax migration: disabled leftover plugin loading", {
+            plugins: filtered.stripped.map((item) => pluginSpecString(item.spec)),
+          })
         }
+        assertSafeStartup(
+          nativeOn,
+          filtered.kept.map((item) => pluginSpecString(item.spec)).filter((spec) => isLegacyTokenMaxPlugin(spec)),
+        )
+        const plugins = filtered.kept
         if (plugins.length) yield* config.waitForDependencies()
 
         const loaded = yield* Effect.promise(() =>
