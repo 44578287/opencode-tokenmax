@@ -283,7 +283,10 @@ export const make = Effect.gen(function* () {
   }
 
   const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
-    Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
+    Effect.callback<
+      readonly [NodeChildProcess.ChildProcess, ExitSignal, hasExited: () => boolean],
+      PlatformError.PlatformError
+    >((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
       let end = false
@@ -312,7 +315,7 @@ export const make = Effect.gen(function* () {
         finish(exit ?? args)
       })
       proc.on("spawn", () => {
-        resume(Effect.succeed([proc, signal]))
+        resume(Effect.succeed([proc, signal, () => exit !== undefined]))
       })
       return Effect.sync(() => {
         if (graceTimer) clearTimeout(graceTimer)
@@ -410,8 +413,31 @@ export const make = Effect.gen(function* () {
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
             }),
-            Effect.fnUntraced(function* ([proc, signal]) {
-              const done = yield* Deferred.isDone(signal)
+            Effect.fnUntraced(function* ([proc, signal, hasExited]) {
+              let done = yield* Deferred.isDone(signal)
+              if (!done && hasExited()) {
+                // The process has already exited (Node's "exit" event
+                // fired) and is just waiting on its own grace period (see
+                // spawn() above) or a slightly delayed "close" event -
+                // both are normal and harmless. Wait passively (no signal
+                // sent) before concluding it needs to be killed, so we
+                // never send a spurious kill to an already-finished
+                // process - that would terminate it via signal, which
+                // surfaces as a false "interrupted" error to any caller
+                // still awaiting exitCode even though the command actually
+                // completed successfully. A process that hasn't exited
+                // yet (hasExited() === false) is genuinely still running,
+                // so it skips this wait and is killed immediately below,
+                // matching the original "kill on scope exit" behavior.
+                yield* Deferred.await(signal).pipe(
+                  Effect.timeoutOrElse({
+                    duration: `${exitToCloseGraceMs()} millis`,
+                    orElse: () => Effect.void,
+                  }),
+                  Effect.ignore,
+                )
+                done = yield* Deferred.isDone(signal)
+              }
               const kill = timeout(proc, command, command.options)
               if (done) {
                 const [code] = yield* Deferred.await(signal)
