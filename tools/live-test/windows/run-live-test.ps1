@@ -129,7 +129,7 @@ if ($auth -and $session) {
     if ($blob -match "FREE|PAYG|model|Route") { $Report.TOKENMAX_MODELS = "PASS" }
   } catch { $Report.errors += "tokenmax-models: $_" }
 
-  $okText = "只回复 OK"
+  $okText = "Reply with exactly OK."
   try {
     $base = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $okText
@@ -143,7 +143,7 @@ if ($auth -and $session) {
     else { $Report.errors += "first-turn kids=$($kids.Count) blob-has-OK=$($blob -match 'OK')" }
   } catch { $Report.errors += "first-turn: $_" }
 
-  $arch = "分析当前项目的代码结构。不要修改代码。"
+  $arch = "Analyze this project's code architecture. Do not modify files. Use separate search, architecture, and verification workers."
   try {
     $base2 = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $arch
@@ -192,10 +192,10 @@ if ($auth -and $session) {
     }
 
     $base3 = @($msgs).Count
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "继续，把第一个问题进一步分析，但不要修改代码。"
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "Continue and analyze the first question in more depth. Do not modify files."
     $msgs2 = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $base3 -TimeoutSec 120
     $blob2 = ($msgs2 | ConvertTo-Json -Depth 6)
-    if ($blob2 -notmatch "no context|what is the first|第一个问题是什么") { $Report.CONTEXT_CONTINUE = "PASS" }
+    if ($blob2 -notmatch "no context|what is the first question") { $Report.CONTEXT_CONTINUE = "PASS" }
     else { $Report.errors += "context continue amnesia" }
     if ($blob2.Length -gt 200) { $Report.ROOT_RETURN = "PASS" }
     Shot "06-root-return.png"
