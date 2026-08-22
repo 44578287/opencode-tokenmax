@@ -131,6 +131,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
     const processor = yield* SessionProcessor.Service
     const compaction = yield* SessionCompaction.Service
     const plugin = yield* Plugin.Service
@@ -1117,10 +1118,7 @@ const layer = Layer.effect(
         const hasSub = message.parts.some((p) => p.type === "subtask")
         const policy = loadPolicy(Global.Path.config)
         const providers = yield* provider.list()
-        const auths = yield* Auth.Service.pipe(
-          Effect.flatMap((auth) => auth.all()),
-          Effect.orElseSucceed(() => ({}) as Record<string, { type?: string }>),
-        )
+        const auths = yield* auth.all().pipe(Effect.orElseSucceed(() => ({}) as Record<string, { type?: string }>))
         try {
           syncCatalog(tokenmaxStore(), Object.values(providers), auths)
         } catch (err) {
@@ -1919,6 +1917,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    Auth.node,
   ],
 })
 

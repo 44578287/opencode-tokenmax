@@ -34,6 +34,33 @@ import { ProviderError } from "./error"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
+/**
+ * Absent explicit provider config there was previously NO watchdog at all
+ * for "connection accepted but the provider never sends a first byte" or
+ * "stream started then went silent forever" - the request would hang until
+ * the OS socket eventually errored (which can be never, on some networks).
+ * That silent hang is indistinguishable from real work in progress, so the
+ * whole session gets stuck BUSY with no way to recover short of the user
+ * clicking Stop. These defaults give every provider call a bounded worst
+ * case while staying generous enough not to trip on legitimate slow/long
+ * reasoning bursts. Both remain fully overridable per-provider via
+ * `headerTimeout`/`chunkTimeout` in options, and can be disabled outright
+ * with `false`.
+ */
+const DEFAULT_HEADER_TIMEOUT_MS = 60_000
+const DEFAULT_CHUNK_TIMEOUT_MS = 120_000
+
+// Read lazily (not module-load-time) so tests can shrink these via env vars
+// without needing to reload the module.
+function defaultHeaderTimeoutMs() {
+  const v = Number(process.env["OPENCODE_TOKENMAX_DEFAULT_HEADER_TIMEOUT_MS"])
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_HEADER_TIMEOUT_MS
+}
+function defaultChunkTimeoutMs() {
+  const v = Number(process.env["OPENCODE_TOKENMAX_DEFAULT_CHUNK_TIMEOUT_MS"])
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_CHUNK_TIMEOUT_MS
+}
+
 function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   if (typeof ms !== "number" || ms <= 0) return res
   if (!res.body) return res
@@ -46,7 +73,13 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
         const id = setTimeout(() => {
           const err = new ProviderError.ResponseStreamError("SSE read timed out")
           ctl.abort(err)
-          void reader.cancel(err)
+          // Fire-and-forget: the underlying reader may already be mid-read
+          // when we cancel it, which can reject. That's expected once we've
+          // already decided to abort - swallow it so it doesn't surface as
+          // an unhandled rejection (which independently fails the caller's
+          // test/request even though the real error is correctly delivered
+          // via `reject(err)` below).
+          reader.cancel(err).catch(() => {})
           reject(err)
         }, ms)
 
@@ -1766,16 +1799,29 @@ const layer = Layer.effect(
         if (existing) return existing
 
         const customFetch = options["fetch"]
-        const chunkTimeout = options["chunkTimeout"]
-        const headerTimeout = options["headerTimeout"]
+        const chunkTimeoutRaw = options["chunkTimeout"]
+        const headerTimeoutRaw = options["headerTimeout"]
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
+        // `false` explicitly disables the watchdog; a number overrides it;
+        // undefined/unset falls back to the safety-net default below.
+        const chunkTimeout =
+          chunkTimeoutRaw === false
+            ? undefined
+            : typeof chunkTimeoutRaw === "number"
+              ? chunkTimeoutRaw
+              : defaultChunkTimeoutMs()
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = init ?? {}
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
-          const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
+          const headerTimeoutMs =
+            headerTimeoutRaw === false
+              ? undefined
+              : typeof headerTimeoutRaw === "number"
+                ? headerTimeoutRaw
+                : defaultHeaderTimeoutMs()
           const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined
           const signals: AbortSignal[] = []
 
@@ -1795,7 +1841,10 @@ const layer = Layer.effect(
           }).finally(() => headerTimeoutCtl?.clear())
 
           if (!chunkAbortCtl) return res
-          return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+          // chunkAbortCtl is only constructed when chunkTimeout is a positive
+          // number (see above), but that's a runtime invariant across two
+          // separate consts, not something the type checker can see.
+          return wrapSSE(res, chunkTimeout!, chunkAbortCtl)
         }
 
         const bundledLoader = BUNDLED_PROVIDERS[model.api.npm]

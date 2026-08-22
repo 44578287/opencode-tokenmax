@@ -112,7 +112,7 @@ it.live("headerTimeout aborts when response headers do not arrive", () =>
   }),
 )
 
-it.live("headerTimeout is opt-in for non-OpenAI providers", () =>
+it.live("headerTimeout is opt-in for non-OpenAI providers (well under the tokenmax default)", () =>
   Effect.gen(function* () {
     const server = yield* Effect.acquireRelease(
       Effect.promise(() => delayedHeaderServer(100)),
@@ -132,6 +132,109 @@ it.live("headerTimeout is opt-in for non-OpenAI providers", () =>
           expect(yield* Effect.promise(() => result.text)).toBe("ok")
         }),
       { config: providerConfig(server.url) },
+    )
+  }),
+)
+
+// --- tokenmax: mid-run busy stall fix regression tests ---
+//
+// Before this fix, a provider with no explicit headerTimeout/chunkTimeout
+// config had NO watchdog at all: a stalled connection or a stream that goes
+// silent forever hung the whole session BUSY with no recovery except the
+// user clicking Stop. These verify the safety-net defaults actually fire
+// when nothing is configured, using tiny overrides so the test stays fast.
+
+it.live("unset headerTimeout still gets a default watchdog and eventually aborts", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedHeaderServer(60_000)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* withEnv({ OPENCODE_TOKENMAX_DEFAULT_HEADER_TIMEOUT_MS: "50" }, () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* Provider.Service
+            const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+            const result = streamText({
+              model: yield* provider.getLanguage(model),
+              onError() {},
+              messages: [{ role: "user", content: "hello" }],
+            })
+
+            const errors = yield* Effect.promise(async () => {
+              const errors: string[] = []
+              for await (const part of result.fullStream) {
+                if (part.type === "error") errors.push(String(part.error))
+              }
+              return errors
+            })
+            expect(errors.join("\n")).toContain("response headers timed out")
+          }),
+        { config: providerConfig(server.url) },
+      ),
+    )
+  }),
+)
+
+it.live("unset chunkTimeout still gets a default watchdog and raises a stream error when SSE stalls", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(60_000)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* withEnv({ OPENCODE_TOKENMAX_DEFAULT_CHUNK_TIMEOUT_MS: "50" }, () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* Provider.Service
+            const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+            const result = streamText({
+              model: yield* provider.getLanguage(model),
+              onError() {},
+              messages: [{ role: "user", content: "hello" }],
+            })
+
+            const error = yield* Effect.promise(async () => {
+              try {
+                for await (const part of result.fullStream) {
+                  if (part.type === "error") return part.error
+                }
+              } catch (error) {
+                return error
+              }
+            })
+            expect(error).toBeInstanceOf(ProviderError.ResponseStreamError)
+          }),
+        { config: providerConfig(server.url) },
+      ),
+    )
+  }),
+)
+
+it.live("chunkTimeout: false disables the default watchdog entirely", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(200)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* withEnv({ OPENCODE_TOKENMAX_DEFAULT_CHUNK_TIMEOUT_MS: "50" }, () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* Provider.Service
+            const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+            const result = streamText({
+              model: yield* provider.getLanguage(model),
+              messages: [{ role: "user", content: "hello" }],
+            })
+            expect(yield* Effect.promise(() => result.text)).toBe("late")
+          }),
+        { config: providerConfig(server.url, { chunkTimeout: false }) },
+      ),
     )
   }),
 )
@@ -209,6 +312,27 @@ async function delayedBodyServer(delay: number): Promise<{ server: Server; url: 
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port")
   return { server, url: `http://127.0.0.1:${address.port}` }
+}
+
+function withEnv<A, E, R>(vars: Record<string, string>, self: () => Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const previous: Record<string, string | undefined> = {}
+      for (const [k, v] of Object.entries(vars)) {
+        previous[k] = process.env[k]
+        process.env[k] = v
+      }
+      return previous
+    }),
+    () => self(),
+    (previous) =>
+      Effect.sync(() => {
+        for (const [k, v] of Object.entries(previous)) {
+          if (v === undefined) delete process.env[k]
+          else process.env[k] = v
+        }
+      }),
+  )
 }
 
 function withAuthContent<A, E, R>(self: Effect.Effect<A, E, R>, value: Record<string, unknown> = defaultAuthContent()) {

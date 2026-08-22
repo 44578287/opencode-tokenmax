@@ -276,6 +276,10 @@ const layer = Layer.effect(
       }
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        // Heartbeat: any stream event proves the run is still making forward
+        // progress. The SessionRunState watchdog uses this to tell a slow
+        // step apart from one that has silently died (see run-state.ts).
+        yield* status.touch(ctx.sessionID)
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return

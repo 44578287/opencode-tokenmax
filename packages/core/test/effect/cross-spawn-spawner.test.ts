@@ -285,6 +285,49 @@ describe("cross-spawn spawner", () => {
         expect(running).toBe(false)
       }),
     )
+
+    // tokenmax: mid-run busy stall fix regression test.
+    //
+    // Node's "close" event only fires once every stdio stream has closed.
+    // If the spawned process backgrounds a grandchild that inherits
+    // stdout/stderr and outlives it, "exit" fires but "close" never does,
+    // and before this fix exitCode/isRunning hung forever - which in turn
+    // hung the tool-call timeout (its own Effect.timeout can't rescue the
+    // caller because enforcing it needs this same event to settle) and
+    // ultimately the whole session stayed BUSY. This verifies exitCode now
+    // resolves via the bounded exit-to-close grace period instead.
+    fx.effect(
+      "exitCode resolves even when a detached grandchild keeps stdio open past exit",
+      Effect.gen(function* () {
+        if (process.platform === "win32") return // detached inherited-stdio grandchildren behave differently on Windows job objects
+
+        const previous = process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"]
+        process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"] = "200"
+        try {
+          const started = Date.now()
+          const handle = yield* js(
+            [
+              "const cp = require('child_process')",
+              // Grandchild inherits stdout/stderr and stays alive for 3s,
+              // well past this test's timeout - if we waited for "close"
+              // naturally, this test would hang for 3s instead of ~200ms.
+              "const child = cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] })",
+              "child.unref()",
+              "process.exit(0)",
+            ].join("\n"),
+          )
+          const code = yield* handle.exitCode
+          const elapsed = Date.now() - started
+          expect(code).toBe(ChildProcessSpawner.ExitCode(0))
+          // Should resolve via the ~200ms grace timer, not hang for the
+          // grandchild's full 3s lifetime.
+          expect(elapsed).toBeLessThan(2_500)
+        } finally {
+          if (previous === undefined) delete process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"]
+          else process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"] = previous
+        }
+      }),
+    )
   })
 
   describe("error handling", () => {

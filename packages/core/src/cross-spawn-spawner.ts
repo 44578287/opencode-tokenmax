@@ -96,6 +96,24 @@ const toPlatformError = (
 
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
 
+/**
+ * Node's ChildProcess "close" event only fires once every stdio stream has
+ * closed. If the process backgrounds a grandchild that inherits stdout/
+ * stderr (e.g. `some-daemon &` without redirecting output), those pipes can
+ * stay open forever even though the process we actually spawned has already
+ * exited ("exit" fires, "close" never does). Without this grace period the
+ * spawner's ExitSignal Deferred never resolves, which hangs every consumer
+ * of exitCode/isRunning forever - including the tool-call timeout in
+ * process.ts, whose own Effect.timeout cannot rescue the caller because
+ * enforcing it requires this same Deferred to settle during Scope close.
+ * See TOKENMAX-ARCHITECTURE.md "Mid-run busy stall" for the incident this
+ * fixes.
+ */
+function exitToCloseGraceMs() {
+  const v = Number(process.env["OPENCODE_TOKENMAX_EXIT_GRACE_MS"])
+  return Number.isFinite(v) && v >= 0 ? v : 3_000
+}
+
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -270,21 +288,34 @@ export const make = Effect.gen(function* () {
       const proc = launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
+      let graceTimer: ReturnType<typeof setTimeout> | undefined
+      const finish = (result: readonly [code: number | null, signal: NodeJS.Signals | null]) => {
+        if (end) return
+        end = true
+        if (graceTimer) clearTimeout(graceTimer)
+        Deferred.doneUnsafe(signal, Exit.succeed(result))
+      }
       proc.on("error", (err) => {
         resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
       proc.on("exit", (...args) => {
         exit = args
+        // The process itself has terminated. Give lingering stdio pipes a
+        // bounded grace period to close naturally; if they don't, resolve
+        // anyway using the exit info we already have rather than hanging
+        // forever on an orphaned pipe (see EXIT_TO_CLOSE_GRACE_MS above).
+        if (graceTimer) clearTimeout(graceTimer)
+        graceTimer = setTimeout(() => finish(exit!), exitToCloseGraceMs())
+        if (typeof graceTimer.unref === "function") graceTimer.unref()
       })
       proc.on("close", (...args) => {
-        if (end) return
-        end = true
-        Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+        finish(exit ?? args)
       })
       proc.on("spawn", () => {
         resume(Effect.succeed([proc, signal]))
       })
       return Effect.sync(() => {
+        if (graceTimer) clearTimeout(graceTimer)
         proc.kill("SIGTERM")
       })
     })

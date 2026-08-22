@@ -26,6 +26,34 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRunState") {}
 
+/**
+ * Outer safety net for the "mid-run busy stall" class of bug: a session's
+ * runLoop fiber is technically still Running, but nothing has made forward
+ * progress (no stream event, no status transition) for a long time, so the
+ * session stays BUSY forever and a plain "continue" prompt just joins the
+ * same stuck Deferred (see Runner.ensureRunning) - only clicking Stop
+ * unblocks it, because Runner.cancel force-fails that Deferred unconditionally.
+ * This periodically detects that condition and does exactly what Stop does,
+ * automatically, so the session always eventually leaves BUSY on its own.
+ * Targeted fixes for the two most common underlying hangs (a stalled
+ * provider stream, a child process whose stdio pipe never closes) live in
+ * provider.ts and cross-spawn-spawner.ts respectively - this is the
+ * catch-all for anything else (a hung subagent, an unexpected promise that
+ * never settles, etc).
+ */
+// Read lazily (not module-load-time) so tests can shrink these via env vars
+// without needing a dynamic import of this module.
+function watchdogIntervalMs() {
+  const v = Number(process.env["OPENCODE_TOKENMAX_WATCHDOG_INTERVAL_MS"])
+  return Number.isFinite(v) && v > 0 ? v : 30_000
+}
+function watchdogStaleMs() {
+  const v = process.env["OPENCODE_TOKENMAX_WATCHDOG_STALE_MS"]
+  if (v === undefined) return 9 * 60_000
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? n : 9 * 60_000
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -45,6 +73,26 @@ const layer = Layer.effect(
             runners.clear()
           }),
         )
+        if (watchdogStaleMs() > 0) {
+          yield* Effect.gen(function* () {
+            yield* Effect.sleep(watchdogIntervalMs())
+            const staleMs = watchdogStaleMs()
+            for (const [sessionID, r] of runners) {
+              if (!r.busy) continue
+              const idleFor = yield* status.idleFor(sessionID)
+              if (idleFor === undefined || idleFor < staleMs) continue
+              yield* Effect.logWarning("tokenmax watchdog: force-recovering stuck session", {
+                sessionID,
+                idleForMs: idleFor,
+              }).pipe(Effect.ignore)
+              // Same terminal path as the user clicking Stop: unblocks any
+              // queued ensureRunning callers and returns the session to Idle,
+              // regardless of whether the underlying stuck operation itself
+              // ever actually settles.
+              yield* r.cancel.pipe(Effect.ignore)
+            }
+          }).pipe(Effect.forever, Effect.forkIn(scope))
+        }
         return { runners, scope }
       }),
     )
@@ -90,7 +138,14 @@ const layer = Layer.effect(
       onInterrupt: Effect.Effect<SessionV1.WithParts>,
       work: Effect.Effect<SessionV1.WithParts>,
     ) {
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work)
+      const r = yield* runner(sessionID, onInterrupt)
+      // Runner's own `onBusy` hook only fires for `startShell`, never for
+      // `ensureRunning` (the path a normal chat prompt takes), so the
+      // watchdog's heartbeat clock would never start without this. Safe to
+      // call unconditionally: if a run is already in progress this just
+      // refreshes lastActivity, which is harmless.
+      yield* status.set(sessionID, { type: "busy" })
+      return yield* r.ensureRunning(work)
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
