@@ -56,7 +56,7 @@ import * as TokenMaxCommands from "@/tokenmax/commands"
 import { isEnabled as tokenmaxEnabled } from "@/tokenmax/config"
 import { store as tokenmaxStore } from "@/tokenmax"
 import { loadPolicy } from "@/tokenmax/policy"
-import { planJobs, groupPhases, fallbackJob } from "@/tokenmax/plan"
+import { planJobs, groupPhases, fallbackJob, skipKeysForFailure } from "@/tokenmax/plan"
 import { buildContextPackage, childPrompt } from "@/tokenmax/context"
 import { upsertWorker, listWorkers } from "@/tokenmax/workers"
 import { listRoutes, rowsToRoutes } from "@/tokenmax/persist"
@@ -1255,7 +1255,7 @@ const layer = Layer.effect(
                       return
                     }
                     const category = classifyError(out?.error?.message ?? "unknown")
-                    skipKeys.push(current.decision.key)
+                    for (const k of skipKeysForFailure(routes, current.decision.key, current.decision.provider, category)) skipKeys.push(k)
                     const next = fallbackJob(current, { routes, policy, skipKeys })
                     upsertWorker(db, {
                       id: workerId,

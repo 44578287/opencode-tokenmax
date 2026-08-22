@@ -22,8 +22,9 @@ const PROVIDER_OR_AUTH: ReadonlySet<string> = new Set([
 
 export function classifyError(text: string | undefined | null): ErrorClass {
   const t = (text ?? "").toLowerCase()
+  if (t.includes("invalid_grant") || t.includes("token refresh") || t.includes("refresh token")) return ErrorClass.AUTH_401
   if (t.includes("401") || t.includes("unauthorized") || t.includes("auth")) return ErrorClass.AUTH_401
-  if (t.includes("429") || t.includes("rate limit")) return ErrorClass.RATE_LIMIT_429
+  if (t.includes("429") || t.includes("rate limit") || t.includes("usage limit")) return ErrorClass.RATE_LIMIT_429
   if (t.includes("quota")) return ErrorClass.QUOTA_EXHAUSTED
   if (t.includes("timeout") || t.includes("timed out")) return ErrorClass.TIMEOUT
   if (t.includes("permission") || t.includes("denied")) return ErrorClass.PERMISSION_DENIED
@@ -31,6 +32,13 @@ export function classifyError(text: string | undefined | null): ErrorClass {
   if (t.includes("tool")) return ErrorClass.TOOL_ERROR
   return ErrorClass.CAPABILITY_FAILURE
 }
+
+export const PROVIDER_WIDE_ERRORS: ReadonlySet<string> = new Set([
+  ErrorClass.AUTH_401,
+  ErrorClass.RATE_LIMIT_429,
+  ErrorClass.QUOTA_EXHAUSTED,
+  ErrorClass.PROVIDER_5XX,
+])
 
 export function isProviderOrAuthFailure(error: string | undefined | null): boolean {
   if (!error) return false

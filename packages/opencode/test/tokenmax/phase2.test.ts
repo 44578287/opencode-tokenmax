@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs"
 import os from "os"
 import path from "path"
-import { classifyText, planJobs, fallbackJob, groupPhases } from "../../src/tokenmax/plan"
+import { classifyText, planJobs, fallbackJob, groupPhases, skipKeysForFailure } from "../../src/tokenmax/plan"
 import { loadPolicy, policyPath, resetPolicyCache } from "../../src/tokenmax/policy"
 import { POLICY_SEED } from "../../src/tokenmax/policy.seed"
 import { buildContextPackage } from "../../src/tokenmax/context"
@@ -10,6 +10,7 @@ import { upsertWorker, listWorkers, cancelRunning } from "../../src/tokenmax/wor
 import { openStore } from "../../src/tokenmax/persist"
 import { classifyError, ErrorClass, affectsCapability } from "../../src/tokenmax/error"
 import type { Route } from "../../src/tokenmax/types"
+import { routeKey } from "../../src/tokenmax/types"
 
 const route = (partial: Partial<Route> & Pick<Route, "providerId" | "modelId">): Route => ({
   variant: "",
@@ -226,5 +227,24 @@ describe("tokenmax phase2 errors", () => {
     expect(classifyError("429 rate limit")).toBe(ErrorClass.RATE_LIMIT_429)
     expect(affectsCapability(ErrorClass.RATE_LIMIT_429, false)).toBe(false)
     expect(classifyError("permission denied")).toBe(ErrorClass.PERMISSION_DENIED)
+  })
+  test("oauth token refresh failure classifies as AUTH_401", () => {
+    expect(
+      classifyError('Token refresh failed: 400 Bad Request {"error": "invalid_grant", "error_description": "Refresh token not found or invalid"}'),
+    ).toBe(ErrorClass.AUTH_401)
+    expect(classifyError("usage limit has been reached")).toBe(ErrorClass.RATE_LIMIT_429)
+  })
+})
+
+describe("tokenmax phase2 provider-wide skip", () => {
+  test("auth/429/5xx skip every route of the failed provider, capability failures skip only the route", () => {
+    const allProviderKeys = (providerId: string) =>
+      routes.filter((r) => r.providerId === providerId).map((r) => routeKey(r.providerId, r.modelId, r.variant))
+    expect(skipKeysForFailure(routes, "anthropic/claude-sonnet-5", "anthropic", ErrorClass.AUTH_401)).toEqual(allProviderKeys("anthropic"))
+    expect(skipKeysForFailure(routes, "anthropic/claude-sonnet-5", "anthropic", ErrorClass.CAPABILITY_FAILURE)).toEqual([
+      "anthropic/claude-sonnet-5",
+    ])
+    expect(skipKeysForFailure(routes, "openai/gpt-5.3-codex-spark", "openai", ErrorClass.RATE_LIMIT_429)).toEqual(allProviderKeys("openai"))
+    expect(skipKeysForFailure(routes, "xai/grok-build-0.1", "xai", ErrorClass.PROVIDER_5XX)).toEqual(allProviderKeys("xai"))
   })
 })

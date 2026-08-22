@@ -2,6 +2,7 @@ import type { Route, RouteDecision, Task } from "./types"
 import { routeKey } from "./types"
 import { decide } from "./router"
 import type { TokenMaxPolicy } from "./policy.seed"
+import { PROVIDER_WIDE_ERRORS } from "./error"
 
 export type WorkerRole = "search" | "exec" | "debug" | "verify"
 
@@ -65,6 +66,11 @@ export function planJobs(opts: {
     })
   }
   return jobs
+}
+
+export function skipKeysForFailure(routes: Route[], failedKey: string, failedProvider: string, category: string): string[] {
+  if (!PROVIDER_WIDE_ERRORS.has(category)) return [failedKey]
+  return routes.filter((r) => r.providerId === failedProvider).map((r) => routeKey(r.providerId, r.modelId, r.variant))
 }
 
 export function fallbackJob(
