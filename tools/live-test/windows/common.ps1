@@ -1,0 +1,65 @@
+$script:InstallDirCandidates = @(
+  (Join-Path $env:LOCALAPPDATA "Programs\OpenCode TokenMax Dev"),
+  (Join-Path $env:LOCALAPPDATA "Programs\opencode-tokenmax-dev")
+)
+$script:UserData = Join-Path $env:APPDATA "ai.opencode.tokenmax.dev"
+$script:OfficialUserData = Join-Path $env:APPDATA "ai.opencode.desktop"
+$script:OfficialConfig = Join-Path $env:USERPROFILE ".config\opencode"
+$script:Workspace = "C:\Users\g9964\Documents\opencode-tokenmax"
+$script:Port = 18789
+$script:ExeName = "OpenCode TokenMax Dev"
+
+function Get-TokenMaxProcesses {
+  Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and (
+      $_.Path -like "*\opencode-tokenmax-dev\*" -or
+      $_.Path -like "*\OpenCode TokenMax Dev\*" -or
+      $_.Path -like "*OpenCode TokenMax Dev.exe"
+    )
+  }
+}
+
+function Get-TokenMaxExe {
+  foreach ($dir in $script:InstallDirCandidates) {
+    $exe = Join-Path $dir "OpenCode TokenMax Dev.exe"
+    if (Test-Path -LiteralPath $exe) { return $exe }
+  }
+  throw "TokenMax Dev exe not found. Install the opencode-tokenmax-dev-windows artifact first."
+}
+
+function Assert-NotOfficialPath([string]$path) {
+  $full = [IO.Path]::GetFullPath($path)
+  foreach ($bad in @($script:OfficialUserData, $script:OfficialConfig, (Join-Path $env:LOCALAPPDATA "Programs\@opencode-aidesktop"))) {
+    if ($full.StartsWith([IO.Path]::GetFullPath($bad), [StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to touch official OpenCode path: $full"
+    }
+  }
+}
+
+function New-LiveTestOutput {
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $dir = Join-Path $script:Workspace "output\live-test\$stamp"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dir "screenshots") | Out-Null
+  return $dir
+}
+
+function Get-LiveTestAuth {
+  $file = Join-Path $script:UserData "live-test-auth.json"
+  if (Test-Path -LiteralPath $file) {
+    return Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+  }
+  return $null
+}
+
+function Get-BasicAuthHeader([string]$user, [string]$pass) {
+  $raw = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
+  return @{ Authorization = "Basic $raw" }
+}
+
+function Redact-Secrets([string]$text) {
+  if (-not $text) { return $text }
+  $text = [regex]::Replace($text, "(?i)(sk-|rk-|ghp_|gho_|xox[baprs]-)[A-Za-z0-9_\-]{8,}", "`$1[REDACTED]")
+  $text = [regex]::Replace($text, "(?i)(bearer\s+)[A-Za-z0-9._\-]{12,}", "`$1[REDACTED]")
+  $text = [regex]::Replace($text, "(?i)(""(?:refresh|access|api)?_?token""\s*:\s*"")[^""]+", "`$1[REDACTED]")
+  return $text
+}

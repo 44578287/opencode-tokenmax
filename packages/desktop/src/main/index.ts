@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import * as http from "node:http"
 import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
@@ -373,7 +373,12 @@ const main = Effect.gen(function* () {
     })
     const hostname = "127.0.0.1"
     const url = `http://${hostname}:${port}`
-    const password = randomUUID()
+    const password = process.env.OPENCODE_SERVER_PASSWORD || randomUUID()
+    if (process.env.OPENCODE_LIVE_TEST === "1") {
+      const authFile = join(app.getPath("userData"), "live-test-auth.json")
+      mkdirSync(app.getPath("userData"), { recursive: true })
+      writeFileSync(authFile, JSON.stringify({ url, username: "opencode", password }))
+    }
 
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
