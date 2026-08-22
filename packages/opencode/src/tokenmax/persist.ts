@@ -151,6 +151,119 @@ function setMeta(db: SqliteDb, key: string, value: string) {
   db.run("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [key, value])
 }
 
+// --- Provider-level quarantine -------------------------------------------
+// A provider that fails with a provider-wide error (dead auth, 429, quota,
+// 5xx) must not keep being picked as an initial routing candidate for every
+// new turn - skipKeys in plan.ts is per-turn only and doesn't persist. This
+// is a durable, DB-backed, self-expiring quarantine keyed by provider id.
+// Cooldown is fixed (no polling/timers): callers check "now vs until" only
+// at the moment they need a routing decision - never sleep/wait on it.
+const QUARANTINE_PREFIX = "quarantine:"
+const AUTH_COOLDOWN_MS = 60 * 60 * 1000 // dead refresh token: unlikely to self-heal soon
+const TRANSIENT_COOLDOWN_MS = 10 * 60 * 1000 // 429/5xx/quota: often self-heals
+
+export interface QuarantineState {
+  providerId: string
+  count: number
+  reason: string
+  quarantinedAt: string
+  until: string
+}
+
+const SILENT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000 // CAPABILITY_FAILURE/TOOL_ERROR from a whole provider: could be a
+// code-level resolution bug (e.g. model not found before any network call), not a
+// real capability judgment about one model. Weak signal individually, but if MULTIPLE
+// DIFFERENT models under the same provider all fail this way in a short window, that's
+// a systemic provider/config problem, not "this model is bad at this task" - quarantine
+// briefly so the router stops burning attempts on it, but recheck sooner than an auth failure.
+
+export function recordProviderFailure(store: Store, providerId: string, category: string, modelId?: string): QuarantineState | undefined {
+  const key = QUARANTINE_PREFIX + providerId
+  const now = Date.now()
+  const existingRaw = getMeta(store.db, key)
+  let count = 1
+  let models: string[] = modelId ? [modelId] : []
+  if (existingRaw) {
+    try {
+      const existing = JSON.parse(existingRaw) as QuarantineState & { models?: string[] }
+      count = (existing.count ?? 0) + 1
+      const prevModels = Array.isArray(existing.models) ? existing.models : []
+      models = modelId ? [...new Set([...prevModels, modelId])] : prevModels
+    } catch {
+      count = 1
+    }
+  }
+  let cooldownMs: number
+  let threshold: number
+  if (category === "AUTH_401") {
+    cooldownMs = AUTH_COOLDOWN_MS
+    threshold = 1 // unambiguous: a dead refresh token affects every model under the provider immediately
+  } else if (category === "RATE_LIMIT_429" || category === "QUOTA_EXHAUSTED" || category === "PROVIDER_5XX") {
+    cooldownMs = TRANSIENT_COOLDOWN_MS
+    threshold = 2 // one free pass to absorb a single blip
+  } else {
+    // CAPABILITY_FAILURE / TOOL_ERROR / anything else: only treat as provider-wide
+    // once at least 2 DIFFERENT models under this provider have shown the same
+    // pattern - a single model failing repeatedly is that model's problem, not the
+    // provider's, and must not quarantine sibling models.
+    cooldownMs = SILENT_FAILURE_COOLDOWN_MS
+    threshold = models.length >= 2 ? 3 : Number.MAX_SAFE_INTEGER
+  }
+  if (count < threshold) {
+    const state: QuarantineState & { models?: string[] } = {
+      providerId,
+      count,
+      reason: category,
+      quarantinedAt: new Date(now).toISOString(),
+      until: new Date(now).toISOString(),
+      models,
+    }
+    setMeta(store.db, key, JSON.stringify(state))
+    return undefined
+  }
+  const state: QuarantineState & { models?: string[] } = {
+    providerId,
+    count,
+    reason: category,
+    quarantinedAt: new Date(now).toISOString(),
+    until: new Date(now + cooldownMs).toISOString(),
+    models,
+  }
+  setMeta(store.db, key, JSON.stringify(state))
+  return state
+}
+
+export function clearProviderQuarantine(store: Store, providerId: string) {
+  setMeta(store.db, QUARANTINE_PREFIX + providerId, JSON.stringify({ providerId, count: 0, reason: "", quarantinedAt: "", until: "" }))
+}
+
+export function isProviderQuarantined(store: Store, providerId: string): boolean {
+  const raw = getMeta(store.db, QUARANTINE_PREFIX + providerId)
+  if (!raw) return false
+  try {
+    const state = JSON.parse(raw) as QuarantineState
+    if (!state.until) return false
+    return new Date(state.until).getTime() > Date.now()
+  } catch {
+    return false
+  }
+}
+
+export function listQuarantinedProviders(store: Store): QuarantineState[] {
+  const rows = store.db.query("SELECT key, value FROM meta WHERE key LIKE ?").all(QUARANTINE_PREFIX + "%") as Array<{ key: string; value: string }>
+  const now = Date.now()
+  const out: QuarantineState[] = []
+  for (const row of rows) {
+    try {
+      const state = JSON.parse(row.value) as QuarantineState
+      if (state.until && new Date(state.until).getTime() > now) out.push(state)
+    } catch {
+      // ignore malformed entries
+    }
+  }
+  return out
+}
+
 export function nativeDbPath(dataDir: string): string {
   return path.join(dataDir, "tokenmax", "tokenmax.sqlite")
 }

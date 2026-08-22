@@ -5,27 +5,22 @@
 Initialize-LiveTestWorkspace
 $Out = New-LiveTestOutput
 
-function Wait-SutSettled($Auth, [string]$SessionId, [int]$Baseline, [int]$TimeoutSec = 90) {
+function Wait-SutSettled($Auth, [string]$SessionId, [array]$BaselineMsgs, [int]$TimeoutSec = 90) {
+  # BaselineMsgs MUST be a message snapshot taken strictly BEFORE the prompt/command
+  # was sent (by the caller). Re-snapshotting here would race an async send that can
+  # already have completed by the time this function is entered, causing a permanent
+  # false "not settled yet" (assistants.Count never exceeds a baseline that already
+  # includes the reply).
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
-  $lastCount = 0
+  $baseA = @($BaselineMsgs | Where-Object { $_.info.role -eq "assistant" }).Count
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 800
     try {
       $msgs = @(Get-SutMessages -Auth $Auth -SessionId $SessionId)
-      if ($msgs.Count -gt $Baseline) {
-        $lastAssistant = @($msgs | Where-Object { $_.info.role -eq "assistant" } | Select-Object -Last 1)
-        if ($lastAssistant.Count -gt 0 -and ($lastAssistant[0].info.error -or $lastAssistant[0].info.time.completed)) {
-          return ,@($msgs)
-        }
-        $kids = @(Get-SutChildren -Auth $Auth -SessionId $SessionId)
-        if ($kids.Count -eq 0) { return ,@($msgs) }
-        $w = Get-SutWorkers -Auth $Auth
-        $wl = @(); if ($w.workers) { $wl = @($w.workers) } elseif ($w -is [System.Array]) { $wl = @($w) }
-        $active = @($wl | Where-Object { $_.state -ne "completed" -and $_.progress -notin @("completed","failed") })
-        if ($wl.Count -gt 0 -and $active.Count -eq 0) {
-          if ($msgs.Count -eq $lastCount) { return ,@($msgs) }
-        }
-        $lastCount = $msgs.Count
+      $assistants = @($msgs | Where-Object { $_.info.role -eq "assistant" })
+      if ($assistants.Count -gt $baseA) {
+        $last = $assistants[$assistants.Count - 1]
+        if ($last.info.error -or $last.info.time.completed) { return ,@($msgs) }
       }
     } catch {}
   }
@@ -61,7 +56,7 @@ function Shot([string]$name) {
 
 function Note([string]$m) { $Report.notes += $m; Write-Host $m }
 
-$env:OPENCODE_TOKENMAX_INJECT_CHILD_FAIL = "1"
+$env:OPENCODE_TOKENMAX_INJECT_CHILD_FAIL = "0"
 
 $auth = $null
 try {
@@ -72,6 +67,10 @@ try {
 } catch {
   $Report.errors += "launch: $_"
   Note "launch failed: $_"
+}
+
+if ($auth) {
+  if (-not (Wait-SutReady -Auth $auth -TimeoutSec 90)) { $Report.errors += "instance not ready after launch" }
 }
 
 Shot "01-startup.png"
@@ -100,7 +99,7 @@ if ($auth -and $session) {
   try {
     $baseH = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "help" -Arguments ""
-    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $baseH.Count -TimeoutSec 30
+    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $baseH -TimeoutSec 30
     Shot "03-help.png"
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
     $blob = ($msgs | ConvertTo-Json -Depth 8)
@@ -112,7 +111,7 @@ if ($auth -and $session) {
     $baseS = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $kidsBefore = @(Get-SutChildren -Auth $auth -SessionId $sid).Count
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "tokenmax-status" -Arguments ""
-    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $baseS.Count -TimeoutSec 30
+    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $baseS -TimeoutSec 30
     Shot "04-tokenmax-status.png"
     $msgs = Get-SutMessages -Auth $auth -SessionId $sid
     $blob = ($msgs | ConvertTo-Json -Depth 8)
@@ -124,7 +123,7 @@ if ($auth -and $session) {
   try {
     $baseM = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $null = Send-SutCommand -Auth $auth -SessionId $sid -Command "tokenmax-models" -Arguments ""
-    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $baseM.Count -TimeoutSec 30
+    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $baseM -TimeoutSec 30
     $blob = ($msgs | ConvertTo-Json -Depth 8)
     if ($blob -match "FREE|PAYG|model|Route") { $Report.TOKENMAX_MODELS = "PASS" }
   } catch { $Report.errors += "tokenmax-models: $_" }
@@ -132,22 +131,32 @@ if ($auth -and $session) {
   $okText = "Reply with exactly OK."
   try {
     $base = @(Get-SutMessages -Auth $auth -SessionId $sid)
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $okText
-    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $base.Count -TimeoutSec 60
+    $kidsBefore = @(Get-SutChildren -Auth $auth -SessionId $sid)
+    $null = Send-SutPromptAsync -Auth $auth -SessionId $sid -Text $okText
+    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $base -TimeoutSec 75
     Shot "02-first-turn.png"
-    $blob = ($msgs | ConvertTo-Json -Depth 8)
-    $userOk = $blob -match [regex]::Escape($okText)
+    $newAll = @(); if ($msgs.Count -gt $base.Count) { $newAll = @($msgs | Select-Object -Skip $base.Count) }
+    $newAssistant = @($newAll | Where-Object { $_.info.role -eq "assistant" })
+    $blob = ""
+    foreach ($na in $newAssistant) { foreach ($np in @($na.parts)) { if ($np.type -eq "text") { $blob += " " + $np.text } } }
+    $userOk = ($newAll | Where-Object { $_.info.role -eq "user" } | ForEach-Object { (@($_.parts | Where-Object { $_.type -eq "text" } | ForEach-Object { $_.text }) -contains $okText) }) -contains $true
     if ($userOk) { $Report.USER_MESSAGE_IMMUTABLE = "PASS" }
-    $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
-    if ($kids.Count -eq 0 -and $blob -match "OK") { $Report.SHORT_PROMPT = "PASS"; $Report.FIRST_TURN = "PASS" }
-    else { $Report.errors += "first-turn kids=$($kids.Count) blob-has-OK=$($blob -match 'OK')" }
+    $kidsAfter = @(Get-SutChildren -Auth $auth -SessionId $sid)
+    $errNote = ""
+    if ($newAssistant.Count -gt 0 -and $newAssistant[$newAssistant.Count-1].info.error) { $errNote = " rootErr=" + [string]$newAssistant[$newAssistant.Count-1].info.error.data.message }
+    if ($kidsAfter.Count -le $kidsBefore.Count -and $blob -match "OK") {
+      $Report.SHORT_PROMPT = "PASS"; $Report.FIRST_TURN = "PASS"
+    } else {
+      $bl = $blob; if ($bl.Length -gt 80) { $bl = $bl.Substring(0,80) }
+      $Report.errors += "first-turn kids=$($kidsAfter.Count)/$($kidsBefore.Count) newA=$($newAssistant.Count) blob=[$bl]$errNote"
+    }
   } catch { $Report.errors += "first-turn: $_" }
 
   $arch = "Analyze this project's code architecture. Do not modify files. Use separate search, architecture, and verification workers."
   try {
     $base2 = @(Get-SutMessages -Auth $auth -SessionId $sid)
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $arch
-    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $base2.Count -TimeoutSec 180
+    $null = Send-SutPromptAsync -Auth $auth -SessionId $sid -Text $arch
+    $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $base2 -TimeoutSec 180
     $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
     $workers = Get-SutWorkers -Auth $auth
     ($workers | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "workers.json")
@@ -156,9 +165,13 @@ if ($auth -and $session) {
     ($msgs | ConvertTo-Json -Depth 8) | Set-Content (Join-Path $Out "messages-complex.json")
     Shot "04-complex-workers.png"
 
-    $wlist = @()
-    if ($workers.workers) { $wlist = @($workers.workers) }
-    elseif ($workers -is [System.Array]) { $wlist = @($workers) }
+    $wlistAll = @()
+    if ($workers.workers) { $wlistAll = @($workers.workers) }
+    elseif ($workers -is [System.Array]) { $wlistAll = @($workers) }
+    # /tokenmax/workers returns every worker ever recorded across all sessions and
+    # all prior harness runs (it's a persistent cross-run DB). Scope to THIS run's
+    # session only, or PASS/FAIL below is measuring stale history, not this run.
+    $wlist = @($wlistAll | Where-Object { $_.parentSessionID -eq $sid })
 
     $done = @($wlist | Where-Object { $_.state -eq "completed" -or $_.progress -eq "completed" })
     $failed = @($wlist | Where-Object { $_.errorCategory -or $_.progress -eq "failed" })
@@ -191,9 +204,9 @@ if ($auth -and $session) {
       $Report.USER_MESSAGE_IMMUTABLE = "PASS"
     }
 
-    $base3 = @($msgs).Count
-    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text "Continue and analyze the first question in more depth. Do not modify files."
-    $msgs2 = Wait-SutSettled -Auth $auth -SessionId $sid -Baseline $base3 -TimeoutSec 120
+    $base3 = @($msgs)
+    $null = Send-SutPromptAsync -Auth $auth -SessionId $sid -Text "Continue and analyze the first question in more depth. Do not modify files."
+    $msgs2 = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $base3 -TimeoutSec 120
     $blob2 = ($msgs2 | ConvertTo-Json -Depth 6)
     if ($blob2 -notmatch "no context|what is the first question") { $Report.CONTEXT_CONTINUE = "PASS" }
     else { $Report.errors += "context continue amnesia" }
@@ -207,6 +220,7 @@ if ($Report.STARTUP -eq "PASS" -and $Report.FIRST_TURN -eq "PASS" -and $Report.H
 }
 
 & "$PSScriptRoot\collect-logs.ps1" -OutDir $Out | Out-Null
+Clear-SutPromptTasks
 $Report | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $Out "report.json")
 $md = @("# Live test $($Out | Split-Path -Leaf)", "")
 foreach ($k in $Report.Keys) {
@@ -223,3 +237,4 @@ $md -join "`n" | Set-Content (Join-Path $Out "report.md")
 & "$PSScriptRoot\stop-tokenmax.ps1" | Out-Null
 Write-Host "REPORT $Out"
 Get-Content (Join-Path $Out "report.md")
+

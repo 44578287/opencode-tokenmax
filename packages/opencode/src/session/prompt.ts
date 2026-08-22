@@ -59,7 +59,7 @@ import { loadPolicy } from "@/tokenmax/policy"
 import { planJobs, groupPhases, fallbackJob, skipKeysForFailure } from "@/tokenmax/plan"
 import { buildContextPackage, childPrompt } from "@/tokenmax/context"
 import { upsertWorker, listWorkers } from "@/tokenmax/workers"
-import { listRoutes, rowsToRoutes } from "@/tokenmax/persist"
+import { listRoutes, rowsToRoutes, isProviderQuarantined, recordProviderFailure, clearProviderQuarantine } from "@/tokenmax/persist"
 import { classifyError } from "@/tokenmax/error"
 import { assistantText, evaluateCompletionGate, fallbackRoute } from "@/tokenmax/completion-gate"
 import { recordCapability } from "@/tokenmax/capability"
@@ -1127,7 +1127,8 @@ const layer = Layer.effect(
         } catch (err) {
           yield* Effect.logError("tokenmax catalog sync failed", { error: err })
         }
-        const routes = rowsToRoutes(listRoutes(tokenmaxStore()))
+        const tmStore = tokenmaxStore()
+        const routes = rowsToRoutes(listRoutes(tmStore)).filter((r) => !isProviderQuarantined(tmStore, r.providerId))
         const jobs = planJobs({
           text: userText,
           routes,
@@ -1236,6 +1237,7 @@ const layer = Layer.effect(
                       ),
                     )
                     if (out?.childSessionID && !out.error) {
+                      clearProviderQuarantine(tmStore, current.decision.provider)
                       upsertWorker(db, {
                         id: workerId,
                         parentSessionID: input.sessionID,
@@ -1255,6 +1257,7 @@ const layer = Layer.effect(
                       return
                     }
                     const category = classifyError(out?.error?.message ?? "unknown")
+                    recordProviderFailure(tmStore, current.decision.provider, category, current.decision.model)
                     for (const k of skipKeysForFailure(routes, current.decision.key, current.decision.provider, category)) skipKeys.push(k)
                     const next = fallbackJob(current, { routes, policy, skipKeys })
                     upsertWorker(db, {
@@ -1364,7 +1367,8 @@ const layer = Layer.effect(
                   errorCategory: "CAPABILITY_FAILURE",
                 })
                 if (gate.action === "root_fallback") {
-                  const next = fallbackRoute(rowsToRoutes(listRoutes(tokenmax)), lastUser.model)
+                  const candidateRoutes = rowsToRoutes(listRoutes(tokenmax)).filter((r) => !isProviderQuarantined(tokenmax, r.providerId))
+                  const next = fallbackRoute(candidateRoutes, lastUser.model)
                   if (next) {
                     rootFallback = { providerID: next.providerId, modelID: next.modelId, variant: next.variant || undefined }
                     recordEvent(tokenmax, "root_early_stop_fallback", route, {

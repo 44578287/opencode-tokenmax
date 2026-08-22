@@ -1,7 +1,8 @@
 ﻿param(
   [string]$Password = "live-test-local-password",
   [int]$Port = 18789,
-  [string]$Workspace = (Join-Path $env:TEMP "tokenmax-e2e-workspace")
+  [string]$Workspace = (Join-Path $env:TEMP "tokenmax-e2e-workspace"),
+  [switch]$FreshAuth
 )
 . "$PSScriptRoot\common.ps1"
 $script:Workspace = $Workspace
@@ -18,7 +19,13 @@ Start-Sleep -Seconds 1
 $env:OPENCODE_PORT = "$Port"
 $env:OPENCODE_SERVER_PASSWORD = $Password
 $env:OPENCODE_LIVE_TEST = "1"
-$env:OPENCODE_TOKENMAX_SKIP_AUTH_IMPORT = "1"
+if ($FreshAuth) {
+  $devAuth = Join-Path $env:APPDATA "ai.opencode.tokenmax.dev\xdg-data\opencode\auth.json"
+  if (Test-Path $devAuth) { Remove-Item $devAuth -Force }
+  Remove-Item Env:\OPENCODE_TOKENMAX_SKIP_AUTH_IMPORT -ErrorAction SilentlyContinue
+} else {
+  $env:OPENCODE_TOKENMAX_SKIP_AUTH_IMPORT = "1"
+}
 
 $proc = Start-Process -FilePath $exe -PassThru -WorkingDirectory $Workspace
 $deadline = (Get-Date).AddSeconds(45)
