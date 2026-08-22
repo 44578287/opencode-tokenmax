@@ -31,6 +31,7 @@ import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
+import { isEmptyCompletion } from "./empty-completion"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
@@ -1048,9 +1049,13 @@ const layer = Layer.effect(
           cause: Cause.pretty(parsed.cause),
         })
       }
+      const persistable: typeof parts = []
       for (const [index, part] of parts.entries()) {
         const p = decodeMessagePart(part, { errors: "all", propertyOrder: "original" })
-        if (Exit.isSuccess(p)) continue
+        if (Exit.isSuccess(p)) {
+          persistable.push(part)
+          continue
+        }
         yield* Effect.logError("invalid user part before save", {
           sessionID: input.sessionID,
           messageID: info.id,
@@ -1063,9 +1068,9 @@ const layer = Layer.effect(
       }
 
       yield* sessions.updateMessage(info)
-      for (const part of parts) yield* sessions.updatePart(part)
+      for (const part of persistable) yield* sessions.updatePart(part)
 
-      return { info, parts }
+      return { info, parts: persistable }
     }, Effect.scoped)
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
@@ -1250,6 +1255,7 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let emptyAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1481,6 +1487,29 @@ const layer = Layer.effect(
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
               }
+            }
+
+            const emptyCompletion = isEmptyCompletion({
+              error: handle.message.error,
+              result,
+              tokens: handle.message.tokens,
+            })
+            if (emptyCompletion) {
+              emptyAttempts += 1
+              yield* Effect.logWarning("empty completion", {
+                sessionID,
+                step,
+                emptyAttempts,
+                finish: handle.message.finish,
+              })
+              if (emptyAttempts <= 1) return "continue" as const
+              handle.message.error = {
+                name: "UnknownError",
+                data: { message: "Provider returned empty completion" },
+              }
+              yield* sessions.updateMessage(handle.message)
+              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+              return "break" as const
             }
 
             if (result === "stop") return "break" as const

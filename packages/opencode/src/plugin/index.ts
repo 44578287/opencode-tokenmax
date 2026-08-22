@@ -315,7 +315,36 @@ const layer = Layer.effect(
       for (const hook of s.hooks) {
         const fn = hook[name] as any
         if (!fn) continue
-        yield* Effect.promise(async () => fn(input, output))
+        const hookName = String(name)
+        const timeoutMs =
+          hookName === "chat.message" ||
+          hookName === "chat.params" ||
+          hookName === "chat.headers" ||
+          hookName === "command.execute.before" ||
+          hookName === "experimental.chat.messages.transform"
+            ? 8_000
+            : 0
+        if (timeoutMs <= 0) {
+          yield* Effect.promise(async () => fn(input, output))
+          continue
+        }
+        yield* Effect.tryPromise({
+          try: () =>
+            Promise.race([
+              Promise.resolve().then(() => fn(input, output)),
+              new Promise((_, reject) => {
+                setTimeout(() => reject(new Error(`plugin hook timeout: ${hookName}`)), timeoutMs)
+              }),
+            ]),
+          catch: (e) => e,
+        }).pipe(
+          Effect.catch((e) =>
+            Effect.logError("plugin hook failed or timed out", {
+              hook: hookName,
+              error: errorMessage(e),
+            }),
+          ),
+        )
       }
       return output
     })
