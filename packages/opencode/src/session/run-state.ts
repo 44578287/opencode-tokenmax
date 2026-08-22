@@ -7,6 +7,8 @@ import { Effect, Latch, Layer, Scope, Context } from "effect"
 import { Session } from "./session"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
+import { activeOperations, recoverOrphanOperations } from "@/tokenmax/operation"
+import { store as tokenmaxStore } from "@/tokenmax"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
@@ -77,6 +79,25 @@ const layer = Layer.effect(
           yield* Effect.gen(function* () {
             yield* Effect.sleep(watchdogIntervalMs())
             const staleMs = watchdogStaleMs()
+            const statuses = yield* status.list()
+            const busySessionIDs = [...statuses.entries()]
+              .filter(([, current]) => current.type === "busy")
+              .map(([sessionID]) => sessionID)
+            // A persisted operation whose owner is no longer BUSY cannot ever
+            // resume a worker. Close that orphan before it can become a
+            // permanent WAITING_EVENT record.
+            yield* Effect.sync(() => recoverOrphanOperations(tokenmaxStore(), busySessionIDs)).pipe(Effect.ignore)
+            for (const [sessionID, current] of statuses) {
+              if (current.type !== "busy" || runners.get(sessionID)?.busy) continue
+              const operations = yield* Effect.sync(() => activeOperations(tokenmaxStore(), sessionID)).pipe(
+                Effect.catch(() => Effect.succeed([])),
+              )
+              if (operations.length > 0) continue
+              yield* Effect.logWarning("tokenmax watchdog: recovering orphan BUSY session", { sessionID }).pipe(
+                Effect.ignore,
+              )
+              yield* status.set(sessionID, { type: "idle" })
+            }
             for (const [sessionID, r] of runners) {
               if (!r.busy) continue
               const idleFor = yield* status.idleFor(sessionID)

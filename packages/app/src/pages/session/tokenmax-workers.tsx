@@ -17,6 +17,15 @@ type Worker = {
   errorCategory: string | null
 }
 
+type Operation = {
+  id: string
+  type: string
+  ownerSessionID: string | null
+  state: string
+  activeHandle: string | null
+  lastProgressAt: string
+}
+
 function icon(state: string) {
   if (state === "completed") return "✓"
   if (state === "running" || state === "queued") return "●"
@@ -31,29 +40,37 @@ export function TokenMaxWorkersBanner(props: { parentSessionID: string; onOpen: 
     () => props.parentSessionID,
     async (parent) => {
       const http = conn()?.http
-      if (!http?.url) return [] as Worker[]
+      if (!http?.url) return { workers: [] as Worker[], operations: [] as Operation[] }
       const headers: Record<string, string> = {}
       if (http.password) {
         headers.Authorization = `Basic ${authTokenFromCredentials({ username: http.username, password: http.password })}`
       }
-      const url = new URL("/tokenmax/workers", http.url.endsWith("/") ? http.url : `${http.url}/`)
-      const res = await fetch(url, { headers })
-      if (!res.ok) return [] as Worker[]
-      const json = (await res.json()) as { workers?: Worker[] }
-      return (json.workers ?? []).filter((w) => w.parentSessionID === parent)
+      const base = http.url.endsWith("/") ? http.url : `${http.url}/`
+      const [workerResult, operationResult] = await Promise.all([
+        fetch(new URL("/tokenmax/workers", base), { headers }),
+        fetch(new URL("/tokenmax/operations", base), { headers }),
+      ])
+      const workers = workerResult.ok ? (((await workerResult.json()) as { workers?: Worker[] }).workers ?? []) : []
+      const operations = operationResult.ok
+        ? (((await operationResult.json()) as { operations?: Operation[] }).operations ?? [])
+        : []
+      return {
+        workers: workers.filter((w) => w.parentSessionID === parent),
+        operations: operations.filter((operation) => operation.ownerSessionID === parent),
+      }
     },
   )
   const timer = setInterval(() => refetch(), 2000)
   onCleanup(() => clearInterval(timer))
 
   return (
-    <Show when={(data() ?? []).length > 0}>
+    <Show when={(data()?.workers ?? []).length > 0 || (data()?.operations ?? []).length > 0}>
       <div
         data-component="tokenmax-workers"
         class="mx-4 mb-2 rounded-[8px] border border-[color-mix(in_oklch,var(--v2-text-text-base)_12%,transparent)] px-3 py-2 text-[12px] leading-5"
       >
-        <div class="font-[530] mb-1">TokenMax · {(data() ?? []).length} workers</div>
-        <For each={data() ?? []}>
+        <div class="font-[530] mb-1">TokenMax · {(data()?.workers ?? []).length} workers</div>
+        <For each={data()?.workers ?? []}>
           {(w) => (
             <div class="flex items-center gap-2 py-0.5">
               <span>{icon(w.state)}</span>
@@ -73,6 +90,15 @@ export function TokenMaxWorkersBanner(props: { parentSessionID: string; onOpen: 
                   打开
                 </button>
               </Show>
+            </div>
+          )}
+        </For>
+        <For each={(data()?.operations ?? []).filter((operation) => !["COMPLETED", "FAILED", "TIMED_OUT", "CANCELLED"].includes(operation.state))}>
+          {(operation) => (
+            <div class="flex items-center gap-2 py-0.5 text-text-weak">
+              <span>◌</span>
+              <span>Waiting · {operation.type}</span>
+              <span class="truncate">{operation.activeHandle ?? operation.id}</span>
             </div>
           )}
         </For>

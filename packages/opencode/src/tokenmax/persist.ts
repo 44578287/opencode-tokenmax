@@ -96,9 +96,36 @@ CREATE TABLE IF NOT EXISTS workers (
    fallback_from TEXT,
    error_category TEXT,
    billing TEXT,
-   progress TEXT
- );
- `
+    progress TEXT
+  );
+CREATE TABLE IF NOT EXISTS operations (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  owner_session_id TEXT,
+  owner_run_id TEXT,
+  owner_worker_id TEXT,
+  owner_dag_node TEXT,
+  state TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  last_progress_at TEXT NOT NULL,
+  deadline_at TEXT,
+  active_handle TEXT,
+  result TEXT,
+  error TEXT,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS operations_owner_session_active
+  ON operations(owner_session_id, state);
+CREATE TABLE IF NOT EXISTS operation_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  operation_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT
+);
+CREATE INDEX IF NOT EXISTS operation_events_operation
+  ON operation_events(operation_id, id);
+  `
 
 export interface Store {
   db: SqliteDb

@@ -20,6 +20,7 @@ export * from "./catalog-sync"
 export * from "./context"
 export * from "./workers"
 export * from "./completion-gate"
+export * from "./operation"
 
 import { Global } from "@opencode-ai/core/global"
 import { openStore, type Store } from "./persist"

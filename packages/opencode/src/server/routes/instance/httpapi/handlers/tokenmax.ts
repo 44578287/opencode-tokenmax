@@ -3,6 +3,7 @@ import { isEnabled } from "@/tokenmax/config"
 import { listRoutes, statsSummary } from "@/tokenmax/persist"
 import { status } from "@/tokenmax/snapshot"
 import { store } from "@/tokenmax"
+import { listOperations, operationTelemetrySummary } from "@/tokenmax/operation"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -33,7 +34,16 @@ export const tokenmaxHandlers = HttpApiBuilder.group(InstanceHttpApi, "tokenmax"
     })
 
     const getStats = Effect.fn("TokenMaxHttpApi.stats")(function* () {
-      return { ...statsSummary(store()), llmRequests: 0 as const }
+      const s = store()
+      const operations = operationTelemetrySummary(s)
+      return {
+        ...statsSummary(s),
+        operations: operations.operations,
+        waitingOperations: operations.waiting,
+        operationTypes: operations.byType,
+        operationEvents: operations.events,
+        llmRequests: 0 as const,
+      }
     })
 
     const getWorkers = Effect.fn("TokenMaxHttpApi.workers")(function* () {
@@ -41,10 +51,15 @@ export const tokenmaxHandlers = HttpApiBuilder.group(InstanceHttpApi, "tokenmax"
       return { workers: status(store(), isEnabled(cfg)).workers, llmRequests: 0 as const }
     })
 
+    const getOperations = Effect.fn("TokenMaxHttpApi.operations")(function* () {
+      return { operations: listOperations(store()), llmRequests: 0 as const }
+    })
+
     return handlers
       .handle("status", getStatus)
       .handle("models", getModels)
       .handle("stats", getStats)
-      .handle("workers", getWorkers)
+       .handle("workers", getWorkers)
+       .handle("operations", getOperations)
   }),
 )

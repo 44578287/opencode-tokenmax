@@ -43,7 +43,9 @@ export function evaluateCompletionGate(input: {
   workers: TokenMaxWorker[]
   earlyStops: number
 }): CompletionGate {
-  const active = input.workers.filter((worker) => worker.state === "queued" || worker.state === "running")
+  const active = input.workers.filter(
+    (worker) => worker.state === "queued" || worker.state === "running" || worker.state === "waiting_event",
+  )
   if (active.length > 0) {
     return {
       state: "INCOMPLETE",

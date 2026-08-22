@@ -67,11 +67,39 @@ export interface TokenMaxWorker {
   variant: string
   billing?: string
   progress?: string
-  state: "queued" | "running" | "completed" | "failed" | "cancelled"
+  state: "queued" | "running" | "waiting_event" | "completed" | "failed" | "cancelled"
   startedAt: string | null
   completedAt: string | null
   fallbackFrom: string | null
   errorCategory: string | null
+}
+
+export type OperationType = "PROCESS" | "GITHUB_ACTIONS" | "FILE" | "TRANSFER" | "PROVIDER" | "CHILD_WORKER"
+
+export type OperationState =
+  | "CREATED"
+  | "RUNNING"
+  | "WAITING_EVENT"
+  | "COMPLETED"
+  | "FAILED"
+  | "TIMED_OUT"
+  | "CANCELLED"
+
+export interface TokenMaxOperation {
+  id: string
+  type: OperationType
+  ownerSessionID: string | null
+  ownerRunID: string | null
+  ownerWorkerID: string | null
+  ownerDagNode: string | null
+  state: OperationState
+  startedAt: string
+  lastProgressAt: string
+  deadlineAt: string | null
+  activeHandle: string | null
+  result: Record<string, unknown> | null
+  error: Record<string, unknown> | null
+  completedAt: string | null
 }
 
 export interface TokenMaxQuotaState {
@@ -100,6 +128,7 @@ export interface TokenMaxStatus {
   leftoverCommands: string[]
   strippedPlugins: string[]
   workers: TokenMaxWorker[]
+  operations: TokenMaxOperation[]
 }
 
 export function routeKey(providerId: string, modelId: string, variant = ""): RouteKey {

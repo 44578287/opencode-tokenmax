@@ -22,6 +22,23 @@ const Worker = Schema.Struct({
   errorCategory: Schema.NullOr(Schema.String),
 }).annotate({ identifier: "TokenMaxWorker" })
 
+const Operation = Schema.Struct({
+  id: Schema.String,
+  type: Schema.String,
+  ownerSessionID: Schema.NullOr(Schema.String),
+  ownerRunID: Schema.NullOr(Schema.String),
+  ownerWorkerID: Schema.NullOr(Schema.String),
+  ownerDagNode: Schema.NullOr(Schema.String),
+  state: Schema.String,
+  startedAt: Schema.String,
+  lastProgressAt: Schema.String,
+  deadlineAt: Schema.NullOr(Schema.String),
+  activeHandle: Schema.NullOr(Schema.String),
+  result: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+  error: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+  completedAt: Schema.NullOr(Schema.String),
+}).annotate({ identifier: "TokenMaxOperation" })
+
 const Status = Schema.Struct({
   enabled: Schema.Boolean,
   mode: Schema.Literals(["NATIVE", "LEGACY_PLUGIN", "OFF"]),
@@ -33,6 +50,7 @@ const Status = Schema.Struct({
   leftoverCommands: Schema.Array(Schema.String),
   strippedPlugins: Schema.Array(Schema.String),
   workers: Schema.Array(Worker),
+  operations: Schema.Array(Operation),
   llmRequests: Schema.Literal(0),
 }).annotate({ identifier: "TokenMaxStatus" })
 
@@ -53,6 +71,10 @@ const Models = Schema.Struct({
 const Stats = Schema.Struct({
   attempts: Schema.Number,
   byBilling: Schema.Array(Schema.Struct({ billing: Schema.String, n: Schema.Number })),
+  operations: Schema.Number,
+  waitingOperations: Schema.Number,
+  operationTypes: Schema.Array(Schema.Struct({ type: Schema.String, n: Schema.Number })),
+  operationEvents: Schema.Array(Schema.Struct({ kind: Schema.String, n: Schema.Number })),
   llmRequests: Schema.Literal(0),
 }).annotate({ identifier: "TokenMaxStats" })
 
@@ -61,11 +83,17 @@ const Workers = Schema.Struct({
   llmRequests: Schema.Literal(0),
 }).annotate({ identifier: "TokenMaxWorkers" })
 
+const Operations = Schema.Struct({
+  operations: Schema.Array(Operation),
+  llmRequests: Schema.Literal(0),
+}).annotate({ identifier: "TokenMaxOperations" })
+
 export const TokenMaxPaths = {
   status: "/tokenmax/status",
   models: "/tokenmax/models",
   stats: "/tokenmax/stats",
   workers: "/tokenmax/workers",
+  operations: "/tokenmax/operations",
 } as const
 
 export const TokenMaxApi = HttpApi.make("tokenmax")
@@ -110,6 +138,16 @@ export const TokenMaxApi = HttpApi.make("tokenmax")
             identifier: "tokenmax.workers.get",
             summary: "TokenMax workers",
             description: "Structured TokenMax worker state. No LLM.",
+          }),
+        ),
+        HttpApiEndpoint.get("operations", TokenMaxPaths.operations, {
+          query: WorkspaceRoutingQuery,
+          success: described(Operations, "TokenMax operations"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "tokenmax.operations.get",
+            summary: "TokenMax event-driven operations",
+            description: "Structured waiting/completed operations. No LLM.",
           }),
         ),
       )

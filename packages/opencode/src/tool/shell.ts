@@ -21,6 +21,11 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { isEnabled } from "@/tokenmax/config"
+import { eventWaitViolation, observableOperationType } from "@/tokenmax/wait-guard"
+import { store as tokenmaxStore } from "@/tokenmax"
+import { recordEvent } from "@/tokenmax/telemetry"
+import { OperationManager } from "@/tokenmax/operation"
 
 export { Parameters } from "./shell/prompt"
 
@@ -435,6 +440,7 @@ export const ShellTool = Tool.define(
       },
       ctx: Tool.Context,
     ) {
+      const cfg = yield* config.get()
       const limits = yield* trunc.limits()
       const keep = limits.maxBytes * 2
       let full = ""
@@ -446,6 +452,17 @@ export const ShellTool = Tool.define(
       let cut = false
       let expired = false
       let aborted = false
+      const operationType = isEnabled(cfg) ? observableOperationType(input.command) : undefined
+      const operationManager = operationType ? new OperationManager(tokenmaxStore()) : undefined
+      const operation = operationManager?.start({
+        type: operationType ?? "PROCESS",
+        ownerSessionID: ctx.sessionID,
+        ownerRunID: null,
+        ownerWorkerID: null,
+        ownerDagNode: operationType === "GITHUB_ACTIONS" ? "github-ci" : "local-command",
+        deadlineAt: null,
+        activeHandle: null,
+      })
 
       const closeSink = Effect.fnUntraced(function* () {
         const stream = sink
@@ -481,10 +498,31 @@ export const ShellTool = Tool.define(
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env)).pipe(
+            Effect.tapError((error) =>
+              Effect.sync(() => {
+                if (operation && operationManager) {
+                  operationManager.fail(operation.id, {
+                    category: "PROCESS_START_ERROR",
+                    message: error instanceof Error ? error.message : String(error),
+                  })
+                }
+              }),
+            ),
+          )
+          if (operation && operationManager) {
+            operationManager.resume(operation.id)
+            operationManager.progress(operation.id, "PROCESS_STARTED", { pid: String(handle.pid) })
+          }
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
+              if (operation && operationManager) {
+                operationManager.progress(operation.id, "PROCESS_OUTPUT", { chunk: preview(chunk) })
+                if (/(?:error TS\d+|fatal error|BUILD FAILED|Compilation failed)/i.test(chunk)) {
+                  operationManager.progress(operation.id, "PROCESS_PROBABLE_FAILURE", { chunk: preview(chunk) })
+                }
+              }
               const size = Buffer.byteLength(chunk, "utf-8")
               list.push({ text: chunk, size })
               used += size
@@ -548,10 +586,18 @@ export const ShellTool = Tool.define(
           if (exit.kind === "abort") {
             aborted = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            if (operation && operationManager) operationManager.cancel(operation.id, { category: "USER_ABORT" })
           }
           if (exit.kind === "timeout") {
             expired = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+            if (operation && operationManager) operationManager.timeout(operation.id, { category: "OPERATION_TIMEOUT" })
+          }
+
+          if (exit.kind === "exit" && operation && operationManager) {
+            operationManager.progress(operation.id, "PROCESS_EXIT", { exitCode: exit.code, pid: String(handle.pid) })
+            if (exit.code === 0) operationManager.complete(operation.id, { exitCode: exit.code })
+            else operationManager.fail(operation.id, { exitCode: exit.code, category: "PROCESS_EXIT" })
           }
 
           return exit.kind === "exit" ? exit.code : null
@@ -619,10 +665,15 @@ export const ShellTool = Tool.define(
               const ps = Shell.ps(shell)
               yield* Effect.scoped(
                 Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
+                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
+                     Effect.sync(() => tree.delete()),
+                   )
+                   const violation = eventWaitViolation(params.command)
+                   if (violation && isEnabled(cfg)) {
+                     recordEvent(tokenmaxStore(), "llm_attempted_sleep", undefined, { command: params.command })
+                     throw new Error(violation)
+                   }
+                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
                   if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
                   yield* ask(ctx, scan, params)
                 }),

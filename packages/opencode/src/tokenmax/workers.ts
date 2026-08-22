@@ -45,7 +45,7 @@ export function listWorkers(db: SqliteDb, parentSessionID?: string): TokenMaxWor
 
 export function cancelRunning(db: SqliteDb, parentSessionID: string) {
   db.run(
-    `UPDATE workers SET state='cancelled', completed_at=? WHERE parent_session_id=? AND state IN ('queued','running')`,
+     `UPDATE workers SET state='cancelled', completed_at=? WHERE parent_session_id=? AND state IN ('queued','running','waiting_event')`,
     [new Date().toISOString(), parentSessionID],
   )
 }
