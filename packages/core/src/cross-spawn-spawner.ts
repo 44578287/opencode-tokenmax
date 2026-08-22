@@ -290,12 +290,18 @@ export const make = Effect.gen(function* () {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
       let end = false
+      // `exit` is only used to (a) expose hasExited() to callers that need
+      // to make a bounded-wait decision (see spawnCommand's release below)
+      // and (b) as a fallback value if "close" somehow fires without its
+      // own args. It intentionally does NOT force-resolve `signal` itself -
+      // exitCode/isRunning stay governed purely by the real "close" event,
+      // identical to upstream, so no consumer of this spawner (ripgrep,
+      // repository-cache, etc.) ever observes a different exit status than
+      // before. Only spawnCommand's release() opts into a bounded wait.
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
-      let graceTimer: ReturnType<typeof setTimeout> | undefined
       const finish = (result: readonly [code: number | null, signal: NodeJS.Signals | null]) => {
         if (end) return
         end = true
-        if (graceTimer) clearTimeout(graceTimer)
         Deferred.doneUnsafe(signal, Exit.succeed(result))
       }
       proc.on("error", (err) => {
@@ -303,13 +309,6 @@ export const make = Effect.gen(function* () {
       })
       proc.on("exit", (...args) => {
         exit = args
-        // The process itself has terminated. Give lingering stdio pipes a
-        // bounded grace period to close naturally; if they don't, resolve
-        // anyway using the exit info we already have rather than hanging
-        // forever on an orphaned pipe (see EXIT_TO_CLOSE_GRACE_MS above).
-        if (graceTimer) clearTimeout(graceTimer)
-        graceTimer = setTimeout(() => finish(exit!), exitToCloseGraceMs())
-        if (typeof graceTimer.unref === "function") graceTimer.unref()
       })
       proc.on("close", (...args) => {
         finish(exit ?? args)
@@ -318,7 +317,6 @@ export const make = Effect.gen(function* () {
         resume(Effect.succeed([proc, signal, () => exit !== undefined]))
       })
       return Effect.sync(() => {
-        if (graceTimer) clearTimeout(graceTimer)
         proc.kill("SIGTERM")
       })
     })
@@ -417,10 +415,11 @@ export const make = Effect.gen(function* () {
               let done = yield* Deferred.isDone(signal)
               if (!done && hasExited()) {
                 // The process has already exited (Node's "exit" event
-                // fired) and is just waiting on its own grace period (see
-                // spawn() above) or a slightly delayed "close" event -
-                // both are normal and harmless. Wait passively (no signal
-                // sent) before concluding it needs to be killed, so we
+                // fired) and is just waiting on a slightly delayed "close"
+                // event - normal and harmless on a loaded machine. Wait
+                // passively (no signal sent, bounded by
+                // OPENCODE_TOKENMAX_EXIT_GRACE_MS) before concluding it
+                // needs to be killed, so we
                 // never send a spurious kill to an already-finished
                 // process - that would terminate it via signal, which
                 // surfaces as a false "interrupted" error to any caller
