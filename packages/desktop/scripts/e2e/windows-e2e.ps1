@@ -129,21 +129,38 @@ function Install-Channel($key) {
   $installer = Join-Path $ch.DistDir "installer.exe"
   Assert (Test-Path $installer) "installer exists at $installer"
 
-  # Pass an explicit, unquoted /D=<path> rather than discovering wherever NSIS
-  # decided to install: /D must be the LAST argument and unquoted, but modern
-  # NSIS does accept a path with spaces there as long as nothing follows it.
-  # This makes the install location a known fact instead of something to
-  # reverse-engineer from a registry value that NSIS doesn't always set.
-  $installLocation = Join-Path $env:LOCALAPPDATA "Programs\$($ch.ProductName)"
-  Remove-Item -Recurse -Force $installLocation -ErrorAction SilentlyContinue
-  $proc = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$installLocation" -PassThru
+  # Deliberately NOT passing an explicit /D=<path>: NSIS requires /D to be
+  # completely unquoted, but PowerShell's Start-Process -ArgumentList
+  # auto-quotes any element containing a space -- and both real product
+  # names here ("OpenCode Dev", "OpenCode TokenMax Dev") have one. A first
+  # real CI run of this script proved that combination silently breaks the
+  # install (installer exits 0, but no registry entry is written at all).
+  # Let NSIS install wherever its own default is, then ask the registry
+  # where that actually was -- fewer assumptions about the NSIS template's
+  # command-line handling.
+  $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru
   $done = $proc.WaitForExit($InstallTimeoutSeconds * 1000)
   Assert $done "installer for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
   Assert ($proc.ExitCode -eq 0) "installer for $($ch.ProductName) exited 0 (got $($proc.ExitCode))"
 
-  Start-Sleep -Seconds 2 # registry writes can lag the installer process exiting
+  Start-Sleep -Seconds 3 # registry writes can lag the installer process exiting
   $entry = Get-UninstallEntry $ch.ProductName
+  if (-not $entry) {
+    Write-Host "  diagnostic: no uninstall entry named '$($ch.ProductName)' found. Known HKCU DisplayNames:"
+    Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+      ForEach-Object { Write-Host "    - $($_.DisplayName)" }
+    $programs = Join-Path $env:LOCALAPPDATA "Programs"
+    Write-Host "  diagnostic: contents of $programs :"
+    Get-ChildItem $programs -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    - $($_.Name)" }
+  }
   Assert ($null -ne $entry) "an Add/Remove Programs entry named '$($ch.ProductName)' exists after install"
+
+  $installLocation = $entry.InstallLocation
+  if (-not $installLocation -and $entry.UninstallString) {
+    $installLocation = Split-Path -Parent ($entry.UninstallString -replace '^"|"$', '')
+  }
+  Assert ([bool]$installLocation) "an install directory was found for $($ch.ProductName)"
+
   return @{ Entry = $entry; InstallLocation = $installLocation }
 }
 
