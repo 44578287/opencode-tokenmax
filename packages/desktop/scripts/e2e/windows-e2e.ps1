@@ -69,6 +69,24 @@ function Assert($condition, $message) {
   Write-Host "  ok: $message" -ForegroundColor Green
 }
 
+# NSIS's silent installer/uninstaller process can exit before its actual
+# registry/filesystem effects are fully visible: oneClick installers/
+# uninstallers commonly copy themselves to a temp location and hand off to
+# that copy to finish the real work (including self-deleting), so
+# WaitForExit() on the originally-launched process is not proof the
+# registry write (or removal) has landed yet. A real CI run proved a fixed
+# `Start-Sleep` before checking is not reliable -- it raced and lost. Poll
+# instead of guessing a delay.
+function Wait-Until($condition, $timeoutSeconds, $description) {
+  $deadline = (Get-Date).AddSeconds($timeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    if (& $condition) { return $true }
+    Start-Sleep -Seconds 1
+  }
+  Write-Host "  warning: timed out after ${timeoutSeconds}s waiting for: $description" -ForegroundColor Yellow
+  return $false
+}
+
 # Extracts just the executable path from a Windows command-line string of
 # the form `"C:\path with spaces\foo.exe" [args]` or `C:\nospaces\foo.exe
 # [args]`. A real CI run proved a naive '^"|"$' quote-strip regex breaks
@@ -216,7 +234,7 @@ function Install-Channel($key) {
   Assert $done "installer for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
   Assert ($proc.ExitCode -eq 0) "installer for $($ch.ProductName) exited 0 (got $($proc.ExitCode))"
 
-  Start-Sleep -Seconds 3 # registry writes can lag the installer process exiting
+  Wait-Until ({ $null -ne (Get-UninstallEntry $ch.ProductName) }.GetNewClosure()) 30 "Add/Remove Programs entry for $($ch.ProductName) to appear" | Out-Null
   $entry = Get-UninstallEntry $ch.ProductName
   if (-not $entry) {
     Write-Host "  diagnostic: no uninstall entry named '$($ch.ProductName)' found. Known HKCU DisplayNames:"
@@ -343,7 +361,7 @@ function Uninstall-Channel($key, $entry, $installLocation) {
   $done = $proc.WaitForExit($InstallTimeoutSeconds * 1000)
   Assert $done "uninstaller for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
 
-  Start-Sleep -Seconds 2
+  Wait-Until ({ $null -eq (Get-UninstallEntry $ch.ProductName) }.GetNewClosure()) 30 "Add/Remove Programs entry for $($ch.ProductName) to disappear" | Out-Null
   $stillThere = Get-UninstallEntry $ch.ProductName
   Assert ($null -eq $stillThere) "Add/Remove Programs entry for '$($ch.ProductName)' is gone after uninstall"
 }
@@ -389,6 +407,7 @@ function Run-SideBySideSequence($officialKey) {
 
   Write-Step "CROSS-CHECK: TokenMax Dev uninstall did not touch $($official.ProductName)"
   Assert-Unchanged $officialKey $officialIdentity.InstallLocation
+  Wait-Until ({ -not (Test-Path $tokenmaxIdentity.InstallLocation) }.GetNewClosure()) 30 "TokenMax Dev install directory to be removed" | Out-Null
   Assert (-not (Test-Path $tokenmaxIdentity.InstallLocation)) "TokenMax Dev install directory is gone"
 
   $officialReady2 = Launch-AndVerifyReady $officialKey $officialIdentity.InstallLocation $officialIdentity.ProtocolKey

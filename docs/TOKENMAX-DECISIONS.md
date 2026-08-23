@@ -164,3 +164,23 @@ since "OpenCode " is *also* a literal prefix of "OpenCode Dev ..." and
 channel's registry entry whenever more than one is installed at once.
 Fixed by comparing the DisplayName with exactly one trailing " <version>"
 token stripped, rather than prefix-matching forward.
+
+### D-008: Poll for NSIS install/uninstall registry effects instead of a fixed sleep
+
+Confidence-gate run (attempt 3 of 3, same commit as D-006/D-007) failed on
+`Uninstall-Channel`'s post-uninstall check: the Add/Remove Programs entry
+was still present 2 seconds after the uninstaller process exited. The
+other two attempts passed — a real, if intermittent, race, not a flake to
+wave off. Root cause: NSIS's silent (oneClick) installer/uninstaller
+commonly copies itself to a temp location and hands off to that copy to
+finish the actual work (including self-deleting), so the originally
+launched process exiting is not proof its registry/filesystem effects
+have landed. A fixed `Start-Sleep` before checking just picks a delay that
+usually — not always — wins that race.
+
+Replaced every fixed-sleep-then-check in `windows-e2e.ps1` (post-install
+registry-entry-appears, post-uninstall registry-entry-gone, post-uninstall
+install-directory-gone) with `Wait-Until`, a short poll loop with a 30s
+timeout — the same pattern `Wait-ForReady` already used for launch
+readiness, now applied consistently everywhere the script waits on an
+NSIS side effect.
