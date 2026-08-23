@@ -10,8 +10,17 @@
   a build log.
 
 .DESCRIPTION
-  Sequence (each step's assertions must hold before the next step runs):
-    1. Install the official "dev" channel.               (baseline: works)
+  The authoritative side-by-side pair is "prod" (the real official OpenCode
+  identity: appId ai.opencode.desktop, product name "OpenCode") + TokenMax
+  Dev -- "dev" is a distinct pre-release channel of the same app family
+  (appId ai.opencode.desktop.dev), not "official OpenCode" itself, so dev +
+  tokenmax-dev alone does not prove official/prod safety. dev + tokenmax-dev
+  still runs as a secondary, additional pass after prod's -- extra coverage,
+  not a substitute.
+
+  Run-SideBySideSequence performs, for a given official channel key
+  ("prod" or "dev"):
+    1. Install the official channel.                      (baseline: works)
     2. Verify its identity (registry, install dir, DisplayName).
     3. Launch it, wait for real readiness (log-based), verify its userData.
     4. Exit it.
@@ -28,7 +37,8 @@
        unchanged.
    12. Launch the official app again -- proves it still works after a
        TokenMax Dev install+uninstall cycle, not just before.
-   13. Exit and uninstall the official app (cleanup).
+   13. Exit and uninstall the official app (cleanup), so the next pass
+       starts from a clean machine.
 
   Exits non-zero (with a specific error) on the first assertion that fails,
   so a CI failure points at exactly which invariant broke.
@@ -86,6 +96,13 @@ $Channels = @{
     ProductName   = "OpenCode Dev"
     ProtocolClass = "opencode"
     DistDir       = "dist-dev"
+  }
+  prod = @{
+    ChannelEnv    = "prod"
+    AppId         = "ai.opencode.desktop"
+    ProductName   = "OpenCode"
+    ProtocolClass = "opencode"
+    DistDir       = "dist-prod"
   }
   "tokenmax-dev" = @{
     ChannelEnv    = "tokenmax-dev"
@@ -146,12 +163,26 @@ function Build-Channel($key) {
   }
 }
 
+# electron-builder's NSIS template appends the version to DisplayName by
+# default (a real CI run confirmed this: "OpenCode Dev" registers as
+# "OpenCode Dev 1.18.20"). A naive "$productName *" -like prefix match is
+# NOT safe once "OpenCode" (prod) is one of the product names being
+# checked: "OpenCode " is *also* a literal prefix of "OpenCode Dev
+# 1.18.20" and "OpenCode TokenMax Dev 1.18.20", so that pattern could
+# match the wrong channel's entry whenever more than one is installed at
+# once (registry enumeration order is not guaranteed). Instead, strip
+# exactly one trailing " <version>" token and compare what's left for
+# exact equality.
+function Test-DisplayNameMatches($displayName, $productName) {
+  if (-not $displayName) { return $false }
+  if ($displayName -eq $productName) { return $true }
+  if ($displayName -match '^(.*) \d+(\.\d+)*$') {
+    return $Matches[1] -eq $productName
+  }
+  return $false
+}
+
 function Get-UninstallEntry($productName) {
-  # electron-builder's NSIS template appends the version to DisplayName by
-  # default (a real CI run confirmed this: "OpenCode Dev" registers as
-  # "OpenCode Dev 1.18.20") -- match the product name exactly OR followed
-  # by a space (never a bare substring, so "OpenCode Dev" can never match
-  # an "OpenCode TokenMax Dev ..." entry).
   $roots = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
     "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -159,7 +190,7 @@ function Get-UninstallEntry($productName) {
   )
   foreach ($root in $roots) {
     $entry = Get-ItemProperty $root -ErrorAction SilentlyContinue |
-      Where-Object { $_.DisplayName -eq $productName -or $_.DisplayName -like "$productName *" }
+      Where-Object { Test-DisplayNameMatches $_.DisplayName $productName }
     if ($entry) { return $entry }
   }
   return $null
@@ -212,7 +243,7 @@ function Verify-Identity($key, $install, [string[]]$mustNotContainPaths) {
   $installLocation = $install.InstallLocation
   Write-Step "VERIFY IDENTITY: $($ch.ProductName)"
   # NSIS appends the version by default ("OpenCode Dev" -> "OpenCode Dev 1.18.20").
-  Assert ($entry.DisplayName -eq $ch.ProductName -or $entry.DisplayName -like "$($ch.ProductName) *") "DisplayName is '$($ch.ProductName)' (got '$($entry.DisplayName)')"
+  Assert (Test-DisplayNameMatches $entry.DisplayName $ch.ProductName) "DisplayName is '$($ch.ProductName)' (got '$($entry.DisplayName)')"
   Assert (Test-Path $installLocation) "install directory '$installLocation' actually exists on disk"
 
   $exe = Get-ChildItem $installLocation -Filter "*.exe" | Where-Object { $_.Name -notlike "Uninstall*" } | Select-Object -First 1
@@ -328,39 +359,55 @@ function Assert-Unchanged($key, $expectedInstallLocation) {
   Assert (Test-Path $expectedInstallLocation) "'$($ch.ProductName)' install directory still exists on disk"
 }
 
+# Installs $officialKey (e.g. "prod" or "dev"), installs TokenMax Dev
+# alongside it, verifies both identities and their mutual isolation, then
+# uninstalls TokenMax Dev and finally the official channel -- leaving the
+# machine clean for the next call. See the module doc comment above for the
+# full numbered sequence this implements.
+function Run-SideBySideSequence($officialKey) {
+  $official = $Channels[$officialKey]
+
+  $officialInstall = Install-Channel $officialKey
+  $officialIdentity = Verify-Identity $officialKey $officialInstall @("tokenmax")
+  $officialReady1 = Launch-AndVerifyReady $officialKey $officialIdentity.InstallLocation $officialIdentity.ProtocolKey
+
+  $tokenmaxInstall = Install-Channel "tokenmax-dev"
+  $tokenmaxIdentity = Verify-Identity "tokenmax-dev" $tokenmaxInstall @($official.AppId)
+
+  Write-Step "CROSS-CHECK: TokenMax Dev install did not touch $($official.ProductName)"
+  Assert-Unchanged $officialKey $officialIdentity.InstallLocation
+  Assert ($officialIdentity.InstallLocation -ne $tokenmaxIdentity.InstallLocation) "install directories are distinct"
+  Assert ($official.AppId -ne $Channels["tokenmax-dev"].AppId) "app ids are distinct"
+  Assert ($official.ProtocolClass -ne $Channels["tokenmax-dev"].ProtocolClass) "protocol schemes are distinct"
+
+  $tokenmaxReady = Launch-AndVerifyReady "tokenmax-dev" $tokenmaxIdentity.InstallLocation $tokenmaxIdentity.ProtocolKey
+  Assert ($tokenmaxReady.UserData -ne $officialReady1.UserData) "userData directories are distinct after both apps have run"
+  $officialSettingsAfterTokenmaxRun = Test-Path (Join-Path $officialReady1.UserData "opencode.settings")
+  Write-Host "  info: $($official.ProductName)'s opencode.settings present: $officialSettingsAfterTokenmaxRun (informational)"
+
+  Uninstall-Channel "tokenmax-dev" $tokenmaxIdentity.Entry $tokenmaxIdentity.InstallLocation
+
+  Write-Step "CROSS-CHECK: TokenMax Dev uninstall did not touch $($official.ProductName)"
+  Assert-Unchanged $officialKey $officialIdentity.InstallLocation
+  Assert (-not (Test-Path $tokenmaxIdentity.InstallLocation)) "TokenMax Dev install directory is gone"
+
+  $officialReady2 = Launch-AndVerifyReady $officialKey $officialIdentity.InstallLocation $officialIdentity.ProtocolKey
+  Assert ($officialReady2.UserData -eq $officialReady1.UserData) "$($official.ProductName)'s userData directory is the same across both runs (nothing migrated/reset it)"
+
+  Uninstall-Channel $officialKey $officialIdentity.Entry $officialIdentity.InstallLocation
+}
+
 # ---------------------------------------------------------------------------
 
+Build-Channel "prod"
 Build-Channel "dev"
 Build-Channel "tokenmax-dev"
 
-$devInstall = Install-Channel "dev"
-$devIdentity = Verify-Identity "dev" $devInstall @("tokenmax")
-$devReady1 = Launch-AndVerifyReady "dev" $devIdentity.InstallLocation $devIdentity.ProtocolKey
+Write-Step "PRIMARY: OpenCode (prod, the real official identity) + TokenMax Dev"
+Run-SideBySideSequence "prod"
 
-$tokenmaxInstall = Install-Channel "tokenmax-dev"
-$tokenmaxIdentity = Verify-Identity "tokenmax-dev" $tokenmaxInstall @("ai.opencode.desktop.dev")
-
-Write-Step "CROSS-CHECK: TokenMax Dev install did not touch the official app"
-Assert-Unchanged "dev" $devIdentity.InstallLocation
-Assert ($devIdentity.InstallLocation -ne $tokenmaxIdentity.InstallLocation) "install directories are distinct"
-Assert ($Channels["dev"].AppId -ne $Channels["tokenmax-dev"].AppId) "app ids are distinct"
-Assert ($Channels["dev"].ProtocolClass -ne $Channels["tokenmax-dev"].ProtocolClass) "protocol schemes are distinct"
-
-$tokenmaxReady = Launch-AndVerifyReady "tokenmax-dev" $tokenmaxIdentity.InstallLocation $tokenmaxIdentity.ProtocolKey
-Assert ($tokenmaxReady.UserData -ne $devReady1.UserData) "userData directories are distinct after both apps have run"
-$devSettingsAfterTokenmaxRun = Test-Path (Join-Path $devReady1.UserData "opencode.settings")
-Write-Host "  info: official app's opencode.settings present: $devSettingsAfterTokenmaxRun (informational)"
-
-Uninstall-Channel "tokenmax-dev" $tokenmaxIdentity.Entry $tokenmaxIdentity.InstallLocation
-
-Write-Step "CROSS-CHECK: TokenMax Dev uninstall did not touch the official app"
-Assert-Unchanged "dev" $devIdentity.InstallLocation
-Assert (-not (Test-Path $tokenmaxIdentity.InstallLocation)) "TokenMax Dev install directory is gone"
-
-$devReady2 = Launch-AndVerifyReady "dev" $devIdentity.InstallLocation $devIdentity.ProtocolKey
-Assert ($devReady2.UserData -eq $devReady1.UserData) "official app's userData directory is the same across both runs (nothing migrated/reset it)"
-
-Uninstall-Channel "dev" $devIdentity.Entry $devIdentity.InstallLocation
+Write-Step "SECONDARY: OpenCode Dev + TokenMax Dev (additional coverage -- not a substitute for the prod pass above)"
+Run-SideBySideSequence "dev"
 
 Write-Host ""
-Write-Host "=== ALL WINDOWS DESKTOP E2E ASSERTIONS PASSED ===" -ForegroundColor Green
+Write-Host "=== ALL WINDOWS DESKTOP E2E ASSERTIONS PASSED (prod authoritative + dev secondary) ===" -ForegroundColor Green
