@@ -111,13 +111,19 @@ function Build-Channel($key) {
 }
 
 function Get-UninstallEntry($productName) {
+  # electron-builder's NSIS template appends the version to DisplayName by
+  # default (a real CI run confirmed this: "OpenCode Dev" registers as
+  # "OpenCode Dev 1.18.20") -- match the product name exactly OR followed
+  # by a space (never a bare substring, so "OpenCode Dev" can never match
+  # an "OpenCode TokenMax Dev ..." entry).
   $roots = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
     "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
     "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
   )
   foreach ($root in $roots) {
-    $entry = Get-ItemProperty $root -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $productName }
+    $entry = Get-ItemProperty $root -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -eq $productName -or $_.DisplayName -like "$productName *" }
     if ($entry) { return $entry }
   }
   return $null
@@ -169,7 +175,8 @@ function Verify-Identity($key, $install, [string[]]$mustNotContainPaths) {
   $entry = $install.Entry
   $installLocation = $install.InstallLocation
   Write-Step "VERIFY IDENTITY: $($ch.ProductName)"
-  Assert ($entry.DisplayName -eq $ch.ProductName) "DisplayName is exactly '$($ch.ProductName)'"
+  # NSIS appends the version by default ("OpenCode Dev" -> "OpenCode Dev 1.18.20").
+  Assert ($entry.DisplayName -eq $ch.ProductName -or $entry.DisplayName -like "$($ch.ProductName) *") "DisplayName is '$($ch.ProductName)' (got '$($entry.DisplayName)')"
   Assert (Test-Path $installLocation) "install directory '$installLocation' actually exists on disk"
 
   $exe = Get-ChildItem $installLocation -Filter "*.exe" | Where-Object { $_.Name -notlike "Uninstall*" } | Select-Object -First 1
