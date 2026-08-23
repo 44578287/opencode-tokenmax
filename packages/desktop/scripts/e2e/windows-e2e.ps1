@@ -105,6 +105,23 @@ function Build-Channel($key) {
     bun run build
     if ($LASTEXITCODE -ne 0) { throw "electron-vite build failed for channel $key" }
 
+    # Regression 3.4 (master brief / docs/TOKENMAX-RELIABILITY.md): Electron
+    # main must never bundle a Bun-only module. Scan the actual compiled
+    # main-process bundle here (pre-asar-packaging, while it's still plain
+    # .js on disk) rather than the packaged install tree: app.asar is a
+    # packed archive that can incidentally contain the literal string from
+    # unrelated conditional/dead source (this repo's own
+    # @opencode-ai/core has a legitimate bun/node conditional #sqlite
+    # import map), and scanning it produced exactly that false-positive-
+    # shaped hit on a real run. out/main is the actual Electron main
+    # process code that would execute -- the only place this check means
+    # what regression 3.4 says.
+    $mainBundle = Join-Path $DesktopDir "out\main"
+    $bunOnlyHits = Get-ChildItem $mainBundle -Recurse -Filter "*.js" -ErrorAction SilentlyContinue |
+      Where-Object { (Select-String -LiteralPath $_.FullName -Pattern '["'']bun:sqlite["'']' -Quiet -ErrorAction SilentlyContinue) }
+    if ($bunOnlyHits.Count -gt 0) { throw "regression 3.4: 'bun:sqlite' import found in Electron main bundle: $($bunOnlyHits.FullName -join ', ')" }
+    Write-Host "  ok: no 'bun:sqlite' import in the Electron main process bundle ($mainBundle)"
+
     # Windows code signing (signWindows() in electron-builder.config.ts) requires
     # Azure credentials this workflow does not have and does not need -- this run
     # verifies installer IDENTITY/lifecycle, not code-signing. GITHUB_ACTIONS is
@@ -206,12 +223,9 @@ function Verify-Identity($key, $install, [string[]]$mustNotContainPaths) {
     Assert (-not ($installLocation -like "*$forbidden*")) "install dir does not sit inside another channel's directory ($forbidden)"
   }
 
-  # Regression 3.4 (master brief / docs/TOKENMAX-RELIABILITY.md): Electron
-  # main must never bundle a Bun-only module. Scan the actual packaged
-  # output, not source, for the exact string that broke the legacy app.
-  $bunOnlyHits = Get-ChildItem $installLocation -Recurse -Include "*.js","*.asar" -ErrorAction SilentlyContinue |
-    Where-Object { (Select-String -LiteralPath $_.FullName -Pattern "bun:sqlite" -SimpleMatch -Quiet -ErrorAction SilentlyContinue) }
-  Assert ($bunOnlyHits.Count -eq 0) "no 'bun:sqlite' reference in the packaged app (found in: $($bunOnlyHits.FullName -join ', '))"
+  # Regression 3.4 is checked in Build-Channel, against the pre-asar main
+  # process bundle -- see the comment there for why app.asar itself is the
+  # wrong scan target (packed-archive false positives on a real run).
 
   # Windows deep-link protocol registration: HKCU\Software\Classes\<scheme>
   # Registration only happens once the app has actually run and called
