@@ -20,10 +20,20 @@
  *  - A listener that throws is isolated and never prevents other
  *    listeners — or the manager itself — from observing the same event
  *    (regression 3.1/3.2: one bad hook must not break the whole pipe).
- *  - `await()` always resolves with the final snapshot, never throws.
- *    Callers must read `.state` — this makes "silent success" and
- *    "swallowed failure" both impossible by construction; there is no
- *    catch block to accidentally treat as done.
+ *    Isolation is not the same as silence: pass `onListenerError` to the
+ *    constructor to observe these failures (operation id, type, event kind,
+ *    the caught error — never the Operation's own result/error payload,
+ *    which may carry caller data) instead of losing them entirely.
+ *  - `await()`'s contract has exactly two parts, and both are load-bearing:
+ *      1. The OPERATION OUTCOME never rejects. FAILED/TIMED_OUT/CANCELLED
+ *         resolve just like COMPLETED — callers must read `.state`. This is
+ *         what makes "silent success" and "swallowed failure" both
+ *         impossible by construction: there is no catch block to
+ *         accidentally treat as done.
+ *      2. Awaiting an UNKNOWN operation id IS a rejection (`UnknownOperationError`).
+ *         That is a programmer error (a typo'd id, a stale reference to an
+ *         Operation that was `prune()`d), not an operation outcome, and
+ *         collapsing it into a silent `undefined` would hide real bugs.
  */
 
 import { type Clock, systemClock, type TimerHandle } from "./clock"
@@ -51,6 +61,24 @@ export type OperationEvent<TResult = unknown, TError = unknown> =
 
 export type OperationListener<TResult = unknown, TError = unknown> = (event: OperationEvent<TResult, TError>) => void
 
+/** Raised by `await()` when the given id was never `start()`-ed, or has been dropped by `prune()`. Never raised for an operation outcome. */
+export class UnknownOperationError extends Error {
+  constructor(readonly operationId: string) {
+    super(`OperationManager: unknown operation "${operationId}"`)
+    this.name = "UnknownOperationError"
+  }
+}
+
+export interface ListenerFailure {
+  readonly operationId: string
+  readonly operationType: string
+  readonly eventKind: "progress" | "terminal"
+  readonly error: unknown
+}
+
+/** Told about a listener that threw, instead of the failure being silently swallowed. Must never receive secrets. */
+export type ListenerErrorSink = (failure: ListenerFailure) => void
+
 interface OperationRecord {
   id: string
   type: string
@@ -73,7 +101,10 @@ let anonymousSeq = 0
 export class OperationManager {
   private readonly records = new Map<string, OperationRecord>()
 
-  constructor(private readonly clock: Clock = systemClock) {}
+  constructor(
+    private readonly clock: Clock = systemClock,
+    private readonly onListenerError?: ListenerErrorSink,
+  ) {}
 
   /** CREATED -> RUNNING. Registers the deadline timer (if any) and returns the initial snapshot. */
   start<TResult = unknown, TError = unknown>(options: StartOptions): OperationSnapshot<TResult, TError> {
@@ -181,10 +212,16 @@ export class OperationManager {
     return this.toSnapshot(record) as OperationSnapshot<TResult, TError>
   }
 
-  /** Resolves with the final snapshot once the Operation reaches ANY terminal state. Never rejects — read `.state`. */
+  /**
+   * Resolves with the final snapshot once the Operation reaches ANY terminal
+   * state (COMPLETED/FAILED/TIMED_OUT/CANCELLED) — the outcome itself never
+   * rejects; read `.state`. Rejects with `UnknownOperationError` only when
+   * `id` was never started, or was dropped by `prune()` — that is a
+   * programmer error, not an operation outcome.
+   */
   await<TResult = unknown, TError = unknown>(id: string): Promise<OperationSnapshot<TResult, TError>> {
     const record = this.records.get(id)
-    if (!record) return Promise.reject(new Error(`OperationManager: unknown operation "${id}"`))
+    if (!record) return Promise.reject(new UnknownOperationError(id))
     if (isTerminalOperationState(record.state)) {
       return Promise.resolve(this.toSnapshot(record) as OperationSnapshot<TResult, TError>)
     }
@@ -278,10 +315,23 @@ export class OperationManager {
     for (const listener of record.listeners) {
       try {
         listener(event)
-      } catch {
+      } catch (error) {
         // A throwing listener must not break emission to the remaining
         // listeners, nor bubble up and take down the manager. Isolation
         // matches the plugin-hook-failure lesson in the master brief (§3.1).
+        // Isolated is not the same as silent: report it if a sink was given.
+        // Only operation id/type/event kind and the caught error are
+        // reported — never the Operation's own result/error payload.
+        try {
+          this.onListenerError?.({
+            operationId: record.id,
+            operationType: record.type,
+            eventKind: event.kind,
+            error,
+          })
+        } catch {
+          // The sink itself is also a hook: a throwing sink must not break emission either.
+        }
       }
     }
   }

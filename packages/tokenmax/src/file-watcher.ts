@@ -129,10 +129,21 @@ interface TransferRecord {
 
 const TRANSFER_TERMINAL: ReadonlySet<TransferState> = new Set(["COMPLETED", "FAILED"])
 
+export interface TransferListenerFailure {
+  readonly transferId: string
+  readonly error: unknown
+}
+
+/** Told about a listener that threw, instead of the failure being silently swallowed. Must never receive secrets. */
+export type TransferListenerErrorSink = (failure: TransferListenerFailure) => void
+
 export class TransferWatcher {
   private readonly records = new Map<string, TransferRecord>()
 
-  constructor(private readonly clock: Clock = systemClock) {}
+  constructor(
+    private readonly clock: Clock = systemClock,
+    private readonly onListenerError?: TransferListenerErrorSink,
+  ) {}
 
   start(id: string, totalBytes?: number): TransferSnapshot {
     if (this.records.has(id)) throw new Error(`TransferWatcher: transfer "${id}" already exists`)
@@ -190,8 +201,14 @@ export class TransferWatcher {
     for (const listener of record.listeners) {
       try {
         listener(record.snapshot)
-      } catch {
-        // Isolate listener failures, same as OperationManager.
+      } catch (error) {
+        // Isolate listener failures, same as OperationManager — and report
+        // them the same way: isolated is not the same as silent.
+        try {
+          this.onListenerError?.({ transferId: record.snapshot.id, error })
+        } catch {
+          // The sink itself is also a hook: a throwing sink must not break emission either.
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { OperationManager } from "../src/operation-manager"
+import { OperationManager, UnknownOperationError } from "../src/operation-manager"
 import { FakeClock } from "./support/fake-clock"
 
 describe("OperationManager", () => {
@@ -128,6 +128,11 @@ describe("OperationManager", () => {
     expect(snapshot.state).toBe("COMPLETED")
   })
 
+  it("await() contract part 2: an UNKNOWN id rejects with UnknownOperationError — a programmer error, not an outcome", async () => {
+    const manager = new OperationManager(new FakeClock())
+    await expect(manager.await("never-started")).rejects.toBeInstanceOf(UnknownOperationError)
+  })
+
   it("isolates a throwing listener so other listeners and the manager keep working", () => {
     const manager = new OperationManager(new FakeClock())
     manager.start({ id: "op1", type: "test" })
@@ -138,6 +143,52 @@ describe("OperationManager", () => {
     manager.subscribe("op1", (event) => seen.push(event.kind))
     expect(() => manager.progress("op1")).not.toThrow()
     expect(seen).toEqual(["progress"])
+  })
+
+  it("isolation is not silence: a throwing listener is reported to the optional error sink", () => {
+    const failures: Array<{ operationId: string; operationType: string; eventKind: string }> = []
+    const manager = new OperationManager(new FakeClock(), (failure) => {
+      failures.push({
+        operationId: failure.operationId,
+        operationType: failure.operationType,
+        eventKind: failure.eventKind,
+      })
+    })
+    manager.start({ id: "op1", type: "child-session" })
+    manager.subscribe("op1", () => {
+      throw new Error("bad plugin hook")
+    })
+    manager.progress("op1")
+    manager.complete("op1")
+    expect(failures).toEqual([
+      { operationId: "op1", operationType: "child-session", eventKind: "progress" },
+      { operationId: "op1", operationType: "child-session", eventKind: "terminal" },
+    ])
+  })
+
+  it("a throwing error sink is itself isolated and never breaks emission", () => {
+    const manager = new OperationManager(new FakeClock(), () => {
+      throw new Error("telemetry backend unavailable")
+    })
+    manager.start({ id: "op1", type: "test" })
+    const seen: string[] = []
+    manager.subscribe("op1", () => {
+      throw new Error("bad plugin hook")
+    })
+    manager.subscribe("op1", (event) => seen.push(event.kind))
+    expect(() => manager.progress("op1")).not.toThrow()
+    expect(seen).toEqual(["progress"])
+  })
+
+  it("the error sink never receives the Operation's own result/error payload, only id/type/eventKind/error", () => {
+    const manager = new OperationManager(new FakeClock(), (failure) => {
+      expect(Object.keys(failure).sort()).toEqual(["error", "eventKind", "operationId", "operationType"])
+    })
+    manager.start({ id: "op1", type: "test" })
+    manager.subscribe("op1", () => {
+      throw new Error("bad plugin hook")
+    })
+    manager.complete("op1", { secret: "should never reach the sink via this path" })
   })
 
   it("listActive scopes by owner and excludes terminal operations", () => {

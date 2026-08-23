@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test"
-import { detectEarlyStop, EarlyStopTracker, evaluateStop } from "../src/completion-gate"
+import { detectEarlyStop, EarlyStopTracker, evaluateStop, type RunRequirement } from "../src/completion-gate"
 
 describe("evaluateStop", () => {
   it("regression 3.7: finish_reason=stop with unmet requirements is CONTINUE, not DONE", () => {
     const decision = evaluateStop([
-      { id: "start-child-a", description: "start Agent A", satisfied: false },
-      { id: "start-child-b", description: "start Agent B", satisfied: true },
+      { id: "start-child-a", description: "start Agent A", satisfied: false, source: "worker" },
+      { id: "start-child-b", description: "start Agent B", satisfied: true, source: "worker" },
     ])
     expect(decision.outcome).toBe("CONTINUE")
     if (decision.outcome === "CONTINUE") {
@@ -14,12 +14,27 @@ describe("evaluateStop", () => {
   })
 
   it("reaches DONE only once every requirement is satisfied", () => {
-    const decision = evaluateStop([{ id: "verify", description: "verifier ran", satisfied: true }])
+    const decision = evaluateStop([
+      { id: "verify", description: "verifier ran", satisfied: true, source: "verification" },
+    ])
     expect(decision).toEqual({ outcome: "TERMINAL", state: "DONE", reason: "all requirements satisfied at stop" })
   })
 
   it("an empty requirement list is trivially DONE", () => {
     expect(evaluateStop([]).outcome).toBe("TERMINAL")
+  })
+
+  it("§17/§18 boundary: evaluateStop() has no textPreview/finish_reason parameter at all — model prose cannot reach it", () => {
+    // Structural guarantee, not just a convention: the only input evaluateStop() accepts is
+    // requirements sourced from dag/operation/worker/verification/objective. There is no code
+    // path — regex, keyword match, or otherwise — for model text to influence this decision.
+    expect(evaluateStop.length).toBe(1)
+    const requirements: RunRequirement[] = [
+      { id: "dag-node-3", description: "final DAG node", satisfied: true, source: "dag" },
+      { id: "op-42", description: "build operation", satisfied: true, source: "operation" },
+      { id: "objective", description: "user objective met", satisfied: true, source: "objective" },
+    ]
+    expect(evaluateStop(requirements).outcome).toBe("TERMINAL")
   })
 })
 

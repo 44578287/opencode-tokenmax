@@ -12,21 +12,43 @@
  * the caller (pending DAG nodes, workers promised but not started,
  * verifiers not yet run, the user's objective not yet satisfied).
  *
+ * `evaluateStop()` — the ONLY function in this module that can produce a
+ * TERMINAL outcome — never looks at model text. It only ever inspects
+ * `RunRequirement.satisfied`, and every `RunRequirement` must declare a
+ * `source` from the closed list below. There is deliberately no
+ * `"model-text"`/`"regex"` source: natural-language intent detection
+ * (`detectEarlyStop` / `EarlyStopTracker`, further down this file) is a
+ * SEPARATE, SECONDARY heuristic. It never constructs a `RunRequirement` and
+ * never gates DONE — it only recommends an escalation action (nag for a
+ * tool call, use a stronger instruction, fall back to a different root
+ * model, or fail explicitly) when a model announces intent with no
+ * observable progress. Do not wire it into `evaluateStop()`'s pending list;
+ * that would let model prose become the completion state machine, which is
+ * exactly what this module exists to prevent.
+ *
  * A Run has exactly four terminal states: DONE, BLOCKED, NEEDS_USER, FAILED.
  * This module never invents a BLOCKED/NEEDS_USER on its own — those are
  * always requested explicitly by the caller, who has the domain context to
  * know the difference between "waiting on an event" and "waiting on a
- * human". What this module *does* decide on its own is whether a claimed
- * "stop" is actually complete, and how to escalate a model that keeps
- * announcing intentions without acting (early-stop).
+ * human".
  */
 
 import type { RunTerminalState } from "./types"
+
+/**
+ * Where a `RunRequirement`'s truth comes from. Closed on purpose: every
+ * requirement must be traceable to runtime state, never to parsed model
+ * text. Extend this list (DAG/Operations/workers/verification/objective are
+ * the sources the master brief names) rather than adding an escape hatch
+ * for "the model said so".
+ */
+export type RequirementSource = "dag" | "operation" | "worker" | "verification" | "objective"
 
 export interface RunRequirement {
   readonly id: string
   readonly description: string
   readonly satisfied: boolean
+  readonly source: RequirementSource
 }
 
 export interface ModelFinishSignal {
@@ -109,6 +131,13 @@ export interface EarlyStopTrackerOptions {
  * ladder from §18: request an explicit tool action, then a stronger
  * instruction, then fall back to a different root model, then give up with
  * an explicit FAILED — never an infinite self-retry loop.
+ *
+ * `record()` returns a RECOMMENDATION, not a state transition: this class
+ * holds no reference to an `OperationManager` or any Run state and cannot
+ * itself fail/complete anything. Even `"EXPLICIT_FAILURE"` is advisory —
+ * the caller decides whether and how to actually call `.fail()` on the
+ * relevant Operation. This keeps early-stop detection strictly downstream
+ * of, and never a substitute for, the authoritative requirement sources.
  */
 export class EarlyStopTracker {
   private readonly counts = new Map<string, number>()

@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { diffDirectorySnapshot, TransferWatcher, watchDirectory, type FileEvent } from "../src/file-watcher"
+import {
+  diffDirectorySnapshot,
+  TransferWatcher,
+  watchDirectory,
+  type FileEvent,
+  type TransferListenerFailure,
+} from "../src/file-watcher"
 import { FakeClock } from "./support/fake-clock"
 
 describe("diffDirectorySnapshot (pure classification, no real filesystem timing)", () => {
@@ -133,6 +139,19 @@ describe("TransferWatcher", () => {
     expect(() => watcher.progress("t1", 5)).not.toThrow()
     watcher.complete("t1")
     expect(seen).toEqual(["PROGRESS", "COMPLETED"])
+  })
+
+  it("isolation is not silence: a throwing listener is reported to the optional error sink", () => {
+    const failures: TransferListenerFailure[] = []
+    const watcher = new TransferWatcher(new FakeClock(), (failure) => failures.push(failure))
+    watcher.start("t1")
+    watcher.subscribe("t1", () => {
+      throw new Error("bad listener")
+    })
+    watcher.progress("t1", 5)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.transferId).toBe("t1")
+    expect((failures[0]!.error as Error).message).toBe("bad listener")
   })
 
   it("starting a duplicate id throws", () => {
