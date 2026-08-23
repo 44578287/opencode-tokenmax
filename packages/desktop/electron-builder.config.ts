@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+import { existsSync, cpSync } from "node:fs"
 
 import type { Configuration } from "electron-builder"
 import { APP_IDS, APP_NAMES, PROTOCOL_SCHEMES } from "./identity"
@@ -45,6 +46,15 @@ const getBase = (appId: string): Configuration => ({
     output: "dist",
     buildResources: "resources",
   },
+  afterPack: async (context: any) => {
+    const { appOutDir } = context
+    const src = path.join(packageDir, "resources", "main", "node_modules")
+    const dest = path.join(appOutDir, "resources", "main", "node_modules")
+    if (existsSync(src)) {
+      cpSync(src, dest, { recursive: true })
+      console.log(`afterPack: copied node_modules to ${dest}`)
+    }
+  },
   // Linux launchers are .desktop files, so this is the desktop file name,
   // not just the app id. For prod, app id "ai.opencode.desktop" becomes
   // "ai.opencode.desktop.desktop".
@@ -55,6 +65,10 @@ const getBase = (appId: string): Configuration => ({
     desktopName: `${appId}.desktop`,
   },
   files: ["out/**/*", "resources/**/*", "!resources/opencode-cli*"],
+  asarUnpack: [
+    "node_modules/@lydell/node-pty*",
+    "node_modules/@parcel/watcher*",
+  ],
   extraResources: [
     ...(channel === "dev"
       ? [
@@ -63,8 +77,19 @@ const getBase = (appId: string): Configuration => ({
             to: "",
             filter: ["opencode-cli*"],
           },
+{
+            from: "resources/main/",
+            to: "main/",
+            filter: ["**/*", "node_modules/**/*"],
+          },
         ]
-      : []),
+      : [
+        {
+          from: "resources/main/",
+          to: "main/",
+          filter: ["**/*", "node_modules/**/*"],
+        },
+        ]),
     {
       from: "native/",
       to: "native/",
