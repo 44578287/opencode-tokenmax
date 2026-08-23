@@ -48,11 +48,24 @@ const getBase = (appId: string): Configuration => ({
   },
   afterPack: async (context: any) => {
     const { appOutDir } = context
-    const src = path.join(packageDir, "resources", "main", "node_modules")
-    const dest = path.join(appOutDir, "resources", "main", "node_modules")
-    if (existsSync(src)) {
+    // Native deps used by the unpacked sidecar chunks must live next to them
+    // under resources/main/node_modules. Source-tree layout differs between
+    // machines (bun hoists into the workspace root), so copy from wherever
+    // electron-builder itself placed the package: resources/app.asar.unpacked
+    // inside this very appOutDir. Fall back to the source-tree copy.
+    const pkgs = ["@lydell/node-pty-win32-x64", "@parcel/watcher-win32-x64"]
+    const destRoot = path.join(appOutDir, "resources", "main", "node_modules")
+    const unpackedRoot = path.join(appOutDir, "resources", "app.asar.unpacked", "node_modules")
+    for (const pkg of pkgs) {
+      const candidates = [
+        path.join(unpackedRoot, pkg),
+        path.join(packageDir, "resources", "main", "node_modules", pkg),
+      ]
+      const src = candidates.find((p) => existsSync(p))
+      if (!src) continue
+      const dest = path.join(destRoot, pkg)
       cpSync(src, dest, { recursive: true })
-      console.log(`afterPack: copied node_modules to ${dest}`)
+      console.log(`afterPack: copied ${pkg} -> ${dest} (from ${src})`)
     }
   },
   // Linux launchers are .desktop files, so this is the desktop file name,

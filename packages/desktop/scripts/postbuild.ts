@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { copyFileSync, mkdirSync, readdirSync, statSync, cpSync } from "node:fs"
+import { createRequire } from "node:module"
 import { resolve } from "node:path"
 
 // Copy sidecar.js from build output to resources/main/ for utilityProcess.fork to find
@@ -22,12 +23,25 @@ if (statSync(chunksSrc, { throwIfNoEntry: false })?.isDirectory()) {
   console.log("No chunks/ directory found in out/main/")
 }
 
-// Copy required node_modules for sidecar chunks (node-pty native module)
-const nodeModulesSrc = resolve(import.meta.dirname, "../node_modules/@lydell/node-pty-win32-x64")
-const nodeModulesDest = resolve(destDir, "node_modules/@lydell/node-pty-win32-x64")
-if (statSync(nodeModulesSrc, { throwIfNoEntry: false })?.isDirectory()) {
-  cpSync(nodeModulesSrc, nodeModulesDest, { recursive: true, dereference: true })
-  console.log("Copied node-pty-win32-x64 to resources/main/node_modules/")
-} else {
-  console.log("node-pty-win32-x64 not found in workspace node_modules at " + nodeModulesSrc)
+// Copy required native modules for sidecar chunks. Bun hoisting layouts vary
+// (package-level vs workspace-root node_modules), so resolve the real path
+// instead of assuming one.
+function findPkg(name: string): string | null {
+  const req = createRequire(resolve(import.meta.dirname, "../package.json"))
+  try {
+    return req.resolve(name + "/package.json").replace(/[/\\]package\.json$/, "")
+  } catch {
+    return null
+  }
+}
+for (const pkg of ["@lydell/node-pty-win32-x64", "@parcel/watcher-win32-x64"]) {
+  if (process.platform !== "win32") break
+  const src = findPkg(pkg)
+  const dest = resolve(destDir, "node_modules", pkg)
+  if (src && statSync(src, { throwIfNoEntry: false })?.isDirectory()) {
+    cpSync(src, dest, { recursive: true, dereference: true })
+    console.log(`Copied ${pkg} to resources/main/node_modules/`)
+  } else {
+    console.log(`${pkg} not resolvable from packages/desktop; skipping (afterPack fallback covers it)`)
+  }
 }
