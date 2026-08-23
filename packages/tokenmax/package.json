@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/tokenmax",
+  "version": "1.18.20",
+  "description": "TokenMax event-driven execution runtime: Operation Manager, Completion Gate, watchdog and no-sleep event watchers",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./clock": "./src/clock.ts",
+    "./types": "./src/types.ts",
+    "./operation-manager": "./src/operation-manager.ts",
+    "./completion-gate": "./src/completion-gate.ts",
+    "./watchdog": "./src/watchdog.ts",
+    "./busy-invariant": "./src/busy-invariant.ts",
+    "./process-watcher": "./src/process-watcher.ts",
+    "./stream-watcher": "./src/stream-watcher.ts",
+    "./poll-watcher": "./src/poll-watcher.ts",
+    "./file-watcher": "./src/file-watcher.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test --timeout 10000"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}
