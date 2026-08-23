@@ -106,10 +106,6 @@ const getBase = (appId: string): Configuration => ({
     perMachine: false,
     installerIcon: `resources/icons/icon.ico`,
     installerHeaderIcon: `resources/icons/icon.ico`,
-    // See resources/installer.nsh: forces the per-user install directory to
-    // be product-name-specific instead of every channel colliding into the
-    // same directory (TokenMax regression 3.5).
-    include: "resources/installer.nsh",
   },
   linux: {
     icon: `resources/icons`,
@@ -152,6 +148,14 @@ function getConfig() {
         protocols: { name: "OpenCode TokenMax Dev", schemes: ["opencode-tokenmax"] },
         deb: { fpm: [metainfoFpm(appId)] },
         rpm: { packageName: "opencode-tokenmax-dev", fpm: [metainfoFpm(appId)] },
+        // TokenMax-only: forces the per-user Windows install directory to be
+        // product-name-specific (see resources/installer.nsh for why --
+        // TokenMax regression 3.5). This is scoped to this channel alone,
+        // not merged into the shared base config: R0 must isolate itself,
+        // not alter dev/beta/prod's install-directory behavior, even though
+        // the underlying electron-builder default is arguably a bug for
+        // every channel. See docs/TOKENMAX-DECISIONS.md D-005.
+        nsis: { ...base.nsis, include: "resources/installer.nsh" },
       }
     }
     case "beta": {

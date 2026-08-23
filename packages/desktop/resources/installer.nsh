@@ -1,24 +1,27 @@
-# Force the per-user NSIS install directory to be product-name-specific.
+# Force TokenMax Dev's per-user NSIS install directory to be
+# product-name-specific -- wired in ONLY for the tokenmax-dev channel (see
+# its case in electron-builder.config.ts), not merged into every channel's
+# shared base config. R0 must isolate TokenMax's own install; it must not
+# alter dev/beta/prod's installer behavior, even to fix a real bug in it.
 #
-# Without this, every channel of this app collides into the exact same
-# install directory. electron-builder's default install-dir name (its
+# Without this, TokenMax Dev collides with whatever official channel is
+# already installed. electron-builder's default install-dir name (its
 # "APP_FILENAME" define) only tries the per-channel productName when
 # `!oneClick || isPerMachine` is true (app-builder-lib's
-# getWindowsInstallationDirName, targets/targetUtil.js) -- but this app
-# builds every channel with oneClick:true, perMachine:false (see
-# electron-builder.config.ts), so that condition is never true for any
-# channel. electron-builder then always falls back to
+# getWindowsInstallationDirName, targets/targetUtil.js) -- but every
+# channel of this app builds with oneClick:true, perMachine:false, so that
+# condition is never true. Left alone, electron-builder falls back to
 # AppInfo.sanitizedName, which comes from this package's single,
 # channel-independent package.json "name" ("@opencode-ai/desktop" ->
-# sanitized to "@opencode-aidesktop"). Every channel -- dev, beta, prod,
-# and TokenMax Dev -- would silently install into
-# "%LocalAppData%\Programs\@opencode-aidesktop", overwriting each other.
-#
-# This is TokenMax regression 3.5 (docs/TOKENMAX-RELIABILITY.md): a real
+# sanitized to "@opencode-aidesktop") -- the same for every channel. This
+# is TokenMax regression 3.5 (docs/TOKENMAX-RELIABILITY.md): a real
 # collision discovered via actual Windows CI runs of
 # scripts/e2e/windows-e2e.ps1, not a theoretical concern -- installing the
-# "dev" channel and then "tokenmax-dev" produced one shared directory
-# still containing "OpenCode Dev.exe" instead of the TokenMax Dev binary.
+# official channel and then "tokenmax-dev" produced one shared directory
+# still containing the official app's .exe instead of the TokenMax Dev
+# binary. The same electron-builder default affects dev/beta/prod's
+# mutual side-by-side installs too, but fixing that generally is not an
+# R0 responsibility -- see docs/TOKENMAX-DECISIONS.md D-005.
 #
 # customInit runs after initMultiUser has already computed the (wrong,
 # shared) default $INSTDIR, so overwrite it here with a directory derived

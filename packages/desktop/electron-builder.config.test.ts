@@ -103,6 +103,35 @@ test("TokenMax Dev has no auto-updater publish config, same as dev", async () =>
   expect(config.publish).toBeUndefined()
 })
 
+test("only tokenmax-dev overrides the NSIS install directory (regression 3.5 fix is isolated)", async () => {
+  const previous = process.env.OPENCODE_CHANNEL
+
+  process.env.OPENCODE_CHANNEL = "tokenmax-dev"
+  const tokenmaxModule = await import("./electron-builder.config.ts?nsis-scope=tokenmax-dev")
+  const tokenmaxConfig = tokenmaxModule.default as Configuration
+  expect(tokenmaxConfig.nsis?.include).toBe("resources/installer.nsh")
+
+  for (const channel of ["dev", "beta", "prod"] as const) {
+    process.env.OPENCODE_CHANNEL = channel
+    const module = await import(`./electron-builder.config.ts?nsis-scope=${channel}`)
+    const config = module.default as Configuration
+    // Official channels must keep upstream's default NSIS behavior --
+    // R0 isolates TokenMax's own install, it does not alter dev/beta/prod's.
+    expect(config.nsis?.include).toBeUndefined()
+    // Every other nsis field stays identical to the shared base for an
+    // official channel (only `include` differs for tokenmax-dev).
+    expect(config.nsis).toEqual({
+      oneClick: true,
+      perMachine: false,
+      installerIcon: "resources/icons/icon.ico",
+      installerHeaderIcon: "resources/icons/icon.ico",
+    })
+  }
+
+  if (previous === undefined) delete process.env.OPENCODE_CHANNEL
+  else process.env.OPENCODE_CHANNEL = previous
+})
+
 for (const channel of ["beta", "prod"] as const) {
   test(`does not bundle the CLI in ${channel} builds`, async () => {
     const previous = process.env.OPENCODE_CHANNEL
