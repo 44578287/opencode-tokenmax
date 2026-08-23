@@ -2468,3 +2468,148 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+// ---------------------------------------------------------------------------
+// TokenMax R0 regression pass (docs/TOKENMAX-RELIABILITY.md, master brief §53).
+//
+// A clean R0 baseline must survive repeated fresh-session first turns, short
+// prompts, tool-call prompts, and a longer tool chain without ever producing
+// a session that fails to reach ASSISTANT_CREATED (regression 3.3), a
+// session left permanently BUSY after the turn actually finished
+// (regression 3.6), or a tool chain that gets abandoned after its first call
+// instead of following through (regression 3.7's early-stop). Everything
+// below runs against the in-process fake LLM server, so a failure points at
+// OpenCode's own prompt loop, never network/provider flake.
+//
+// "first turn" and "short prompt" are combined into one loop: both exercise
+// the exact same fresh-session-to-assistant-message code path in this
+// harness, so running them as 20 independent-but-identical loops would add
+// iteration count without adding coverage.
+// ---------------------------------------------------------------------------
+
+it.instance(
+  "R0 regression: fresh session first turn / short prompt reaches an assistant message and settles idle, x20",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+
+      for (let i = 0; i < 20; i++) {
+        const session = yield* sessions.create({ title: `R0 first-turn ${i}` })
+        yield* llm.text(`ok ${i}`)
+
+        const result = yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: i % 2 === 0 ? "hi" : "hello, are you there?" }],
+        })
+
+        // regression 3.3: a fresh session's first turn must reach
+        // ASSISTANT_CREATED -- never stay stuck on the user message alone.
+        expect(result.info.role).toBe("assistant")
+        expect(result.parts.some((part) => part.type === "text" && part.text === `ok ${i}`)).toBe(true)
+
+        const msgs = yield* sessions.messages({ sessionID: session.id })
+        expect(msgs.map((msg) => msg.info.role)).toEqual(["user", "assistant"])
+
+        // regression 3.6: BUSY must never persist once the turn has actually completed.
+        const settled = yield* status.get(session.id)
+        expect(settled.type).not.toBe("busy")
+      }
+
+      expect(yield* llm.calls).toBe(20)
+    }),
+  60_000,
+)
+
+it.instance(
+  "R0 regression: coding prompt with a real tool call completes normally, x10",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+
+      for (let i = 0; i < 10; i++) {
+        const file = path.join(dir, `r0-probe-${i}.txt`)
+        yield* writeText(file, "probe")
+
+        const session = yield* sessions.create({
+          title: `R0 tool call ${i}`,
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* llm.tool("glob", { pattern: `r0-probe-${i}.txt` })
+        yield* llm.text("found it")
+
+        const result = yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: `find r0-probe-${i}.txt` }],
+        })
+
+        expect(result.info.role).toBe("assistant")
+        const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+        const tool = msgs
+          .flatMap((msg) => msg.parts)
+          .find(
+            (part): part is CompletedToolPart =>
+              part.type === "tool" && part.tool === "glob" && part.state.status === "completed",
+          )
+        expect(tool).toBeDefined()
+        if (tool) expect(tool.state.output).toContain(file)
+        expect(result.parts.some((part) => part.type === "text" && part.text === "found it")).toBe(true)
+
+        const settled = yield* status.get(session.id)
+        expect(settled.type).not.toBe("busy")
+      }
+    }),
+  60_000,
+)
+
+it.instance(
+  "R0 regression: longer tool chain (two sequential tool calls before completion) follows through, x5",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+
+      for (let i = 0; i < 5; i++) {
+        const file = path.join(dir, `r0-chain-${i}.txt`)
+        yield* writeText(file, "chain")
+
+        const session = yield* sessions.create({
+          title: `R0 tool chain ${i}`,
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        yield* llm.tool("glob", { pattern: `r0-chain-${i}.txt` })
+        yield* llm.tool("glob", { pattern: "**/*.txt" })
+        yield* llm.text("done")
+
+        const result = yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: `find r0-chain-${i}.txt then list all txt files` }],
+        })
+
+        // regression 3.7 (early-stop): the model must be driven through BOTH
+        // queued tool calls, not stopped after the first just because a tool ran.
+        expect(yield* llm.calls).toBe(3 * (i + 1))
+        const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+        const toolCount = msgs
+          .flatMap((msg) => msg.parts)
+          .filter((part) => part.type === "tool" && part.tool === "glob" && part.state.status === "completed").length
+        expect(toolCount).toBeGreaterThanOrEqual(2)
+        expect(result.info.role).toBe("assistant")
+        expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+
+        const settled = yield* status.get(session.id)
+        expect(settled.type).not.toBe("busy")
+      }
+    }),
+  60_000,
+)

@@ -1,0 +1,60 @@
+name: tokenmax-desktop-e2e
+
+# Real Windows Desktop E2E for TokenMax's R0 gate (master brief section 45,
+# docs/TOKENMAX-RELIABILITY.md). This is deliberately separate from the
+# existing `test`/`publish` workflows: it packages TWO channels (the
+# official "dev" channel and TokenMax Dev), actually installs both,
+# verifies their identities never collide, launches and exits each one,
+# uninstalls TokenMax Dev, and re-verifies the official app is untouched
+# throughout -- see packages/desktop/scripts/e2e/windows-e2e.ps1 for the
+# full, assertion-by-assertion sequence.
+#
+# `workflow_dispatch`-only for now: this is R0 verification infrastructure,
+# not a required check on every push yet.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: tokenmax-desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  r0-regression:
+    name: R0 regression pass (packages/opencode, Windows)
+    runs-on: blacksmith-4vcpu-windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run TokenMax R0 regression tests
+        working-directory: packages/opencode
+        run: bun test test/session/prompt.test.ts -t "R0 regression"
+        timeout-minutes: 15
+
+  desktop-e2e:
+    name: Windows Desktop E2E (package/install/launch/uninstall, side-by-side identity)
+    runs-on: blacksmith-4vcpu-windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run Windows Desktop E2E
+        run: ./scripts/e2e/windows-e2e.ps1 -DesktopDir "${{ github.workspace }}\packages\desktop"
+        working-directory: packages/desktop
+        timeout-minutes: 45
