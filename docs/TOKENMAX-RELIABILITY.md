@@ -90,8 +90,12 @@ channel. This is genuinely pre-existing upstream behavior: any two
 channels installed side by side would have collided into the same
 directory before TokenMax's `tokenmax-dev` channel existed. Fixed via
 `resources/installer.nsh`'s `customInit` macro, which overwrites `$INSTDIR`
-with the already-correct per-channel `PRODUCT_FILENAME` define. See
-`TOKENMAX-DECISIONS.md` D-005.
+with the already-correct per-channel `PRODUCT_FILENAME` define — wired in
+for the `tokenmax-dev` channel only (`electron-builder.config.ts`), so
+official `dev`/`beta`/`prod` builds keep electron-builder's exact upstream
+default install-directory behavior unchanged. Fixing the same collision
+for dev/beta/prod's own mutual side-by-side installs is a real, separate
+improvement, not an R0 responsibility. See `TOKENMAX-DECISIONS.md` D-005.
 
 ### 3.6 — Mid-run permanent BUSY (ORPHAN_BUSY)
 

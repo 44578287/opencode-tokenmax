@@ -82,14 +82,15 @@ approved.
 
 ### D-001: New work happens on `tokenmax-rebuild/main`, branched from clean `dev`
 
-Branched from `origin/dev @ ba72a6f` (verified against upstream immediately
-before branching — no drift). This is a distinct line from
-`claude/event-driven-execution-model-ge98zn`, which stays parked as the
-R2.5 prototype reference per D-003. Rationale: the master brief is explicit
-that TokenMax must not be built by continuing to patch a prior
-implementation, and must always remain mergeable with upstream `dev` —
-starting genuinely clean is the only way to guarantee that from day one,
-rather than retrofitting it later.
+Originally branched from `origin/dev @ ba72a6f` (this fork's own `dev`,
+mistakenly treated as authoritative — see D-006, which corrects this: the
+branch was rebased onto the real `anomalyco/opencode` upstream). This is a
+distinct line from `claude/event-driven-execution-model-ge98zn`, which
+stays parked as the R2.5 prototype reference per D-003. Rationale: the
+master brief is explicit that TokenMax must not be built by continuing to
+patch a prior implementation, and must always remain mergeable with
+upstream `dev` — starting genuinely clean is the only way to guarantee
+that from day one, rather than retrofitting it later.
 
 ## Standing criteria for reusing anything from a prior TokenMax pass
 
@@ -105,17 +106,61 @@ one or any future one), it must answer yes to all of:
 
 No large-scale cherry-picking. Each module is evaluated individually.
 
-### D-005: Every Desktop channel gets its own NSIS install directory
+### D-005: TokenMax Dev gets its own NSIS install directory (scoped to TokenMax only)
 
 Discovered via real Windows CI (`tokenmax-desktop-e2e.yml` run #7): after
 installing "dev" then "tokenmax-dev", TokenMax Dev's install directory
-still contained `OpenCode Dev.exe` — both channels had installed into the
-identical directory (regression 3.5, root-caused — see
+still contained the official app's `.exe` — both channels had installed
+into the identical directory (regression 3.5, root-caused — see
 `TOKENMAX-RELIABILITY.md` 3.5). Fixed with `resources/installer.nsh` (an
-NSIS `customInit` macro, wired in via `electron-builder.config.ts`'s
-`nsis.include`) that forces `$INSTDIR` to a per-channel path derived from
-`PRODUCT_FILENAME`. Applies uniformly to all four channels, since the
-underlying collision was never TokenMax-specific — verified via run #8,
-the first fully green Windows Desktop E2E pass (package, install for both
-channels, identity/registry/protocol verification, launch, userData
-isolation, uninstall, and cross-channel checks throughout).
+NSIS `customInit` macro) that forces `$INSTDIR` to a path derived from
+`PRODUCT_FILENAME`.
+
+**Revised after R0 review**: the fix is wired in via `nsis.include` on the
+`tokenmax-dev` case only, not the shared base `nsis` config. The same
+electron-builder default affects dev/beta/prod's own mutual side-by-side
+installs too, and fixing it there would be a real improvement — but R0's
+job is to prove TokenMax isolates itself, not to change official OpenCode
+channels' installer behavior as a side effect. `dev`/`beta`/`prod` keep
+exactly electron-builder's upstream-default `nsis` config
+(`electron-builder.config.test.ts` asserts this). If the general fix is
+wanted for dev/beta/prod, it belongs in a separate, explicit change (or an
+upstream issue/PR against `anomalyco/opencode`), not folded into TokenMax
+R0.
+
+### D-006: R0 upstream baseline corrected to the real anomalyco/opencode `dev`, not this fork's stale mirror
+
+R0 review caught that `origin/dev` (`44578287/opencode-tokenmax`, this
+fork) was 17 commits behind the actual authoritative upstream,
+`anomalyco/opencode` `dev` — material commits, touching
+`provider/provider.ts`, `provider/transform.ts`, `account/account.ts`,
+`session/prompt.ts`, and `test/session/prompt.test.ts`. Treating a fork's
+own `dev` as authoritative upstream merely because it happens to mirror an
+older upstream commit was the mistake; the fork is not the source of
+truth. Corrected by adding `anomalyco/opencode` as a git remote, freezing
+`R0_UPSTREAM_BASELINE_SHA = 3a31c4ea801915c0b050df4b3842997ea62b6e93`
+(upstream `dev`'s HEAD at review time — deliberately not chased further
+if upstream moves again mid-verification), and rebasing every TokenMax R0
+commit onto it with `git rebase --onto`. The rebase applied cleanly (no
+conflicts); all local and CI-verified tests were re-run and re-verified
+against the corrected baseline.
+
+### D-007: The authoritative Windows side-by-side E2E pair is prod + TokenMax Dev, not dev + TokenMax Dev
+
+R0 review correctly identified that "dev" (`ai.opencode.desktop.dev`,
+"OpenCode Dev") is a distinct pre-release channel, not "official OpenCode"
+(`ai.opencode.desktop`, "OpenCode", the `prod` channel) — so a dev +
+TokenMax Dev side-by-side pass does not prove official/prod safety.
+`scripts/e2e/windows-e2e.ps1` now runs its full install → verify → launch
+→ uninstall → cross-check sequence for **prod + TokenMax Dev first, as the
+authoritative pass**, then repeats it for dev + TokenMax Dev as secondary,
+additional coverage (not a substitute).
+
+This also surfaced a real, previously-latent bug: the script's DisplayName
+matcher (`"$productName *" -like`, to tolerate NSIS's version suffix) is
+unsafe once "OpenCode" (prod) is one of the product names being matched,
+since "OpenCode " is *also* a literal prefix of "OpenCode Dev ..." and
+"OpenCode TokenMax Dev ..." — a prod lookup could match the wrong
+channel's registry entry whenever more than one is installed at once.
+Fixed by comparing the DisplayName with exactly one trailing " <version>"
+token stripped, rather than prefix-matching forward.
