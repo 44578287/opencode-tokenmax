@@ -31,14 +31,18 @@ async function signWindows(configuration: { path: string }) {
 
 const channel = (() => {
   const raw = process.env.OPENCODE_CHANNEL
-  if (raw === "dev" || raw === "beta" || raw === "prod") return raw
+  if (raw === "dev" || raw === "beta" || raw === "prod" || raw === "tokenmax-dev") return raw
   return "dev"
 })()
 
+// "tokenmax-dev" is TokenMax's side-by-side development identity, not an
+// OpenCode release channel -- see docs/TOKENMAX-ARCHITECTURE.md ("Desktop
+// side-by-side identity") and src/main/constants.ts.
 const APP_IDS = {
   dev: "ai.opencode.desktop.dev",
   beta: "ai.opencode.desktop.beta",
   prod: "ai.opencode.desktop",
+  "tokenmax-dev": "ai.opencode.tokenmax.dev",
 } as const
 
 const getBase = (appId: string): Configuration => ({
@@ -57,7 +61,7 @@ const getBase = (appId: string): Configuration => ({
   },
   files: ["out/**/*", "resources/**/*", "!resources/opencode-cli*"],
   extraResources: [
-    ...(channel === "dev"
+    ...(channel === "dev" || channel === "tokenmax-dev"
       ? [
           {
             from: "resources/",
@@ -130,6 +134,20 @@ function getConfig() {
         productName: "OpenCode Dev",
         deb: { fpm: [metainfoFpm(appId)] },
         rpm: { packageName: "opencode-dev", fpm: [metainfoFpm(appId)] },
+      }
+    }
+    case "tokenmax-dev": {
+      // TokenMax's side-by-side development identity -- not an OpenCode
+      // release channel. Distinct product name and protocol scheme so it
+      // can never collide with an official install's registration. No
+      // `publish` config, matching "dev": this build is never auto-updated.
+      return {
+        ...base,
+        appId,
+        productName: "OpenCode TokenMax Dev",
+        protocols: { name: "OpenCode TokenMax Dev", schemes: ["opencode-tokenmax"] },
+        deb: { fpm: [metainfoFpm(appId)] },
+        rpm: { packageName: "opencode-tokenmax-dev", fpm: [metainfoFpm(appId)] },
       }
     }
     case "beta": {

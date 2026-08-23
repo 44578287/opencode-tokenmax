@@ -9,6 +9,11 @@ import { app } from "electron"
 const execFileAsync = promisify(execFile)
 const root = dirname(fileURLToPath(import.meta.url))
 const stateHome = process.env.XDG_STATE_HOME
+// Deliberately only the official channels: this lets dev/beta/prod discover
+// and share one already-running CLI background service, since they're all
+// the same product. "ai.opencode.tokenmax.dev" is intentionally absent --
+// TokenMax Dev must never auto-discover or attach to an official app's
+// running service (side-by-side identity requires isolated writable state).
 const desktopStateNames = ["ai.opencode.desktop.dev", "ai.opencode.desktop.beta", "ai.opencode.desktop"]
 
 type Logger = {

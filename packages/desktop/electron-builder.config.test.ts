@@ -7,6 +7,7 @@ const channels = [
   { channel: "dev", appId: "ai.opencode.desktop.dev" },
   { channel: "beta", appId: "ai.opencode.desktop.beta" },
   { channel: "prod", appId: "ai.opencode.desktop" },
+  { channel: "tokenmax-dev", appId: "ai.opencode.tokenmax.dev" },
 ] as const
 
 for (const channel of channels) {
@@ -57,20 +58,49 @@ test("keeps a hidden prod launcher for old Linux pins", async () => {
   expect(desktop).toContain("NoDisplay=true")
 })
 
-test("bundles the CLI outside the dev app archive", async () => {
+for (const channel of ["dev", "tokenmax-dev"] as const) {
+  test(`bundles the CLI outside the ${channel} app archive`, async () => {
+    const previous = process.env.OPENCODE_CHANNEL
+    process.env.OPENCODE_CHANNEL = channel
+    const module = await import(`./electron-builder.config.ts?cli-resource=${channel}`)
+    const config = module.default as Configuration
+    if (previous === undefined) delete process.env.OPENCODE_CHANNEL
+    else process.env.OPENCODE_CHANNEL = previous
+
+    expect(config.files).toContain("!resources/opencode-cli*")
+    expect(config.extraResources).toContainEqual({
+      from: "resources/",
+      to: "",
+      filter: ["opencode-cli*"],
+    })
+  })
+}
+
+test("TokenMax Dev uses a distinct protocol scheme and product name from every official channel", async () => {
   const previous = process.env.OPENCODE_CHANNEL
-  process.env.OPENCODE_CHANNEL = "dev"
-  const module = await import("./electron-builder.config.ts?cli-resource")
+  process.env.OPENCODE_CHANNEL = "tokenmax-dev"
+  const module = await import("./electron-builder.config.ts?protocol=tokenmax-dev")
   const config = module.default as Configuration
   if (previous === undefined) delete process.env.OPENCODE_CHANNEL
   else process.env.OPENCODE_CHANNEL = previous
 
-  expect(config.files).toContain("!resources/opencode-cli*")
-  expect(config.extraResources).toContainEqual({
-    from: "resources/",
-    to: "",
-    filter: ["opencode-cli*"],
-  })
+  expect(config.appId).toBe("ai.opencode.tokenmax.dev")
+  expect(config.productName).toBe("OpenCode TokenMax Dev")
+  expect(config.protocols).toEqual({ name: "OpenCode TokenMax Dev", schemes: ["opencode-tokenmax"] })
+  // Every official channel (dev/beta/prod) registers the plain "opencode" scheme -- TokenMax Dev must not.
+  const schemes = Array.isArray(config.protocols) ? config.protocols.flatMap((p) => p.schemes) : config.protocols?.schemes
+  expect(schemes).not.toContain("opencode")
+})
+
+test("TokenMax Dev has no auto-updater publish config, same as dev", async () => {
+  const previous = process.env.OPENCODE_CHANNEL
+  process.env.OPENCODE_CHANNEL = "tokenmax-dev"
+  const module = await import("./electron-builder.config.ts?publish=tokenmax-dev")
+  const config = module.default as Configuration
+  if (previous === undefined) delete process.env.OPENCODE_CHANNEL
+  else process.env.OPENCODE_CHANNEL = previous
+
+  expect(config.publish).toBeUndefined()
 })
 
 for (const channel of ["beta", "prod"] as const) {

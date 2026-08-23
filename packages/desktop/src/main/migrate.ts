@@ -3,7 +3,7 @@ import log from "electron-log/main.js"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { CHANNEL } from "./constants"
+import { CHANNEL, type Channel } from "./constants"
 import { getStore } from "./store"
 
 const TAURI_MIGRATED_KEY = "tauriMigrated"
@@ -21,8 +21,10 @@ function tauriDir(id: string) {
   }
 }
 
-// The Tauri app identifier changes between dev/beta/prod builds.
-const TAURI_APP_IDS: Record<string, string> = {
+// The Tauri app identifier changes between dev/beta/prod builds. TokenMax
+// Dev never existed as a Tauri app, so it has no entry here -- tauriAppId()
+// returns undefined for it, and migrate() below no-ops in that case.
+const TAURI_APP_IDS: Partial<Record<Channel, string>> = {
   dev: "ai.opencode.desktop.dev",
   beta: "ai.opencode.desktop.beta",
   prod: "ai.opencode.desktop",
@@ -72,7 +74,14 @@ export function migrate() {
     return
   }
 
-  const dir = tauriDir(tauriAppId())
+  const appId = tauriAppId()
+  if (appId === undefined) {
+    log.log("tauri migration: no Tauri app id for this channel, nothing to migrate", { channel: CHANNEL })
+    getStore().set(TAURI_MIGRATED_KEY, true)
+    return
+  }
+
+  const dir = tauriDir(appId)
   log.log("tauri migration: starting", { dir })
 
   if (!existsSync(dir)) {

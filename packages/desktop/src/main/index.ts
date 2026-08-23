@@ -13,7 +13,7 @@ import contextMenu from "electron-context-menu"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
-import { CHANNEL } from "./constants"
+import { APP_IDS, APP_NAMES, CHANNEL, PROTOCOL_SCHEMES } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
@@ -50,16 +50,6 @@ import { cleanupStoreFiles } from "./store-cleanup"
 import { startBackgroundCli } from "./background-cli"
 import { setNativeTranslations } from "./native-translations"
 
-const APP_NAMES: Record<string, string> = {
-  dev: "OpenCode Dev",
-  beta: "OpenCode Beta",
-  prod: "OpenCode",
-}
-const APP_IDS: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
-}
 const TEST_ONBOARDING = process.env.OPENCODE_TEST_ONBOARDING === "1"
 const SIDECAR_VERSION = process.env.OPENCODE_SIDECAR_V2 === "1" ? "v2" : "v1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
@@ -138,6 +128,24 @@ const main = Effect.gen(function* () {
     process.env.XDG_STATE_HOME = join(root, "state")
     return root
   })()
+  // TokenMax Dev must never read or write the official app's (or a real
+  // terminal `opencode`'s) actual XDG state -- side-by-side identity means
+  // fully isolated runtime state, not just a separate Electron userData
+  // directory. Skipped when TEST_ONBOARDING already provides an isolated,
+  // ephemeral root of its own.
+  if (app.isPackaged && CHANNEL === "tokenmax-dev" && !onboardingTestRoot) {
+    const tokenmaxXdgRoot = join(app.getPath("appData"), appId, "xdg")
+    const xdgDirs = {
+      XDG_DATA_HOME: join(tokenmaxXdgRoot, "data"),
+      XDG_CONFIG_HOME: join(tokenmaxXdgRoot, "config"),
+      XDG_CACHE_HOME: join(tokenmaxXdgRoot, "cache"),
+      XDG_STATE_HOME: join(tokenmaxXdgRoot, "state"),
+    }
+    for (const [key, value] of Object.entries(xdgDirs)) {
+      mkdirSync(value, { recursive: true })
+      process.env[key] = value
+    }
+  }
   app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "OpenCode Dev")
   app.setAppUserModelId(appId)
   app.setPath(
@@ -202,8 +210,10 @@ const main = Effect.gen(function* () {
 
   const shellEnv = preferAppEnv(app.getPath("userData"))
 
+  const protocolScheme = PROTOCOL_SCHEMES[CHANNEL]
+
   app.on("second-instance", (_event: Event, argv: string[]) => {
-    const urls = argv.filter((arg: string) => arg.startsWith("opencode://"))
+    const urls = argv.filter((arg: string) => arg.startsWith(`${protocolScheme}://`))
     if (urls.length) {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
@@ -268,7 +278,7 @@ const main = Effect.gen(function* () {
       }),
     ),
   )
-  app.setAsDefaultProtocolClient("opencode")
+  app.setAsDefaultProtocolClient(protocolScheme)
   registerRendererProtocol()
   setDockIcon()
   const updater = setupAutoUpdater(stopSidecars)
