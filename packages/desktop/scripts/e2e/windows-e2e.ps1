@@ -129,7 +129,14 @@ function Install-Channel($key) {
   $installer = Join-Path $ch.DistDir "installer.exe"
   Assert (Test-Path $installer) "installer exists at $installer"
 
-  $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru
+  # Pass an explicit, unquoted /D=<path> rather than discovering wherever NSIS
+  # decided to install: /D must be the LAST argument and unquoted, but modern
+  # NSIS does accept a path with spaces there as long as nothing follows it.
+  # This makes the install location a known fact instead of something to
+  # reverse-engineer from a registry value that NSIS doesn't always set.
+  $installLocation = Join-Path $env:LOCALAPPDATA "Programs\$($ch.ProductName)"
+  Remove-Item -Recurse -Force $installLocation -ErrorAction SilentlyContinue
+  $proc = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$installLocation" -PassThru
   $done = $proc.WaitForExit($InstallTimeoutSeconds * 1000)
   Assert $done "installer for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
   Assert ($proc.ExitCode -eq 0) "installer for $($ch.ProductName) exited 0 (got $($proc.ExitCode))"
@@ -137,30 +144,37 @@ function Install-Channel($key) {
   Start-Sleep -Seconds 2 # registry writes can lag the installer process exiting
   $entry = Get-UninstallEntry $ch.ProductName
   Assert ($null -ne $entry) "an Add/Remove Programs entry named '$($ch.ProductName)' exists after install"
-  return $entry
+  return @{ Entry = $entry; InstallLocation = $installLocation }
 }
 
-function Verify-Identity($key, $entry, [string[]]$mustNotContainPaths) {
+function Verify-Identity($key, $install, [string[]]$mustNotContainPaths) {
   $ch = $Channels[$key]
+  $entry = $install.Entry
+  $installLocation = $install.InstallLocation
   Write-Step "VERIFY IDENTITY: $($ch.ProductName)"
   Assert ($entry.DisplayName -eq $ch.ProductName) "DisplayName is exactly '$($ch.ProductName)'"
-
-  $installLocation = $entry.InstallLocation
-  if (-not $installLocation -and $entry.UninstallString) {
-    $installLocation = Split-Path -Parent ($entry.UninstallString -replace '^"|"$', '')
-  }
-  Assert ([bool]$installLocation) "an install directory was found for $($ch.ProductName)"
   Assert (Test-Path $installLocation) "install directory '$installLocation' actually exists on disk"
+
+  $exe = Get-ChildItem $installLocation -Filter "*.exe" | Where-Object { $_.Name -notlike "Uninstall*" } | Select-Object -First 1
+  Assert ($null -ne $exe) "found the app executable inside '$installLocation'"
+  Assert ($exe.Name -eq "$($ch.ProductName).exe") "installed executable is named '$($ch.ProductName).exe' (got '$($exe.Name)')"
 
   foreach ($forbidden in $mustNotContainPaths) {
     Assert (-not ($installLocation -like "*$forbidden*")) "install dir does not sit inside another channel's directory ($forbidden)"
   }
 
+  # Regression 3.4 (master brief / docs/TOKENMAX-RELIABILITY.md): Electron
+  # main must never bundle a Bun-only module. Scan the actual packaged
+  # output, not source, for the exact string that broke the legacy app.
+  $bunOnlyHits = Get-ChildItem $installLocation -Recurse -Include "*.js","*.asar" -ErrorAction SilentlyContinue |
+    Where-Object { (Select-String -LiteralPath $_.FullName -Pattern "bun:sqlite" -SimpleMatch -Quiet -ErrorAction SilentlyContinue) }
+  Assert ($bunOnlyHits.Count -eq 0) "no 'bun:sqlite' reference in the packaged app (found in: $($bunOnlyHits.FullName -join ', '))"
+
   # Windows deep-link protocol registration: HKCU\Software\Classes\<scheme>
-  $protocolKey = "HKCU:\Software\Classes\$($ch.ProtocolClass)"
   # Registration only happens once the app has actually run and called
   # app.setAsDefaultProtocolClient(); caller verifies this after first launch.
-  return @{ InstallLocation = $installLocation; ProtocolKey = $protocolKey }
+  $protocolKey = "HKCU:\Software\Classes\$($ch.ProtocolClass)"
+  return @{ InstallLocation = $installLocation; ProtocolKey = $protocolKey; Entry = $entry }
 }
 
 function Wait-ForReady($appId, $timeoutSeconds) {
@@ -212,7 +226,15 @@ function Launch-AndVerifyReady($key, $installLocation, $protocolKey) {
     Assert $true "'$($ch.ProductName)' logged server ready: $readyLine"
     Assert (Test-Path $ready.UserData) "userData directory '$($ready.UserData)' exists after first launch"
 
-    Assert (Test-Path $protocolKey) "protocol scheme '$($ch.ProtocolClass)://' is registered (HKCU:\Software\Classes\$($ch.ProtocolClass))"
+    # Registration itself, the URL Protocol marker Windows requires to treat
+    # it as a real handler (not just a key that happens to exist), and the
+    # actual invoked command -- all three, not just key existence.
+    $protocol = Get-ItemProperty $protocolKey -ErrorAction SilentlyContinue
+    Assert ($null -ne $protocol) "protocol scheme '$($ch.ProtocolClass)://' is registered ($protocolKey)"
+    Assert ($protocol.PSObject.Properties.Name -contains "URL Protocol") "'$($ch.ProtocolClass)' has the URL Protocol marker set"
+    $protocolCommand = (Get-ItemProperty "$protocolKey\shell\open\command" -ErrorAction SilentlyContinue)."(default)"
+    Assert ([bool]$protocolCommand) "'$($ch.ProtocolClass)' has an open command registered"
+    Assert ($protocolCommand -like "*$($exe.Name)*") "'$($ch.ProtocolClass)' open command invokes '$($exe.Name)' (got: $protocolCommand)"
 
     return $ready
   } finally {
@@ -254,12 +276,12 @@ function Assert-Unchanged($key, $expectedInstallLocation) {
 Build-Channel "dev"
 Build-Channel "tokenmax-dev"
 
-$devEntry = Install-Channel "dev"
-$devIdentity = Verify-Identity "dev" $devEntry @("tokenmax")
+$devInstall = Install-Channel "dev"
+$devIdentity = Verify-Identity "dev" $devInstall @("tokenmax")
 $devReady1 = Launch-AndVerifyReady "dev" $devIdentity.InstallLocation $devIdentity.ProtocolKey
 
-$tokenmaxEntry = Install-Channel "tokenmax-dev"
-$tokenmaxIdentity = Verify-Identity "tokenmax-dev" $tokenmaxEntry @("ai.opencode.desktop.dev")
+$tokenmaxInstall = Install-Channel "tokenmax-dev"
+$tokenmaxIdentity = Verify-Identity "tokenmax-dev" $tokenmaxInstall @("ai.opencode.desktop.dev")
 
 Write-Step "CROSS-CHECK: TokenMax Dev install did not touch the official app"
 Assert-Unchanged "dev" $devIdentity.InstallLocation
@@ -272,7 +294,7 @@ Assert ($tokenmaxReady.UserData -ne $devReady1.UserData) "userData directories a
 $devSettingsAfterTokenmaxRun = Test-Path (Join-Path $devReady1.UserData "opencode.settings")
 Write-Host "  info: official app's opencode.settings present: $devSettingsAfterTokenmaxRun (informational)"
 
-Uninstall-Channel "tokenmax-dev" $tokenmaxEntry $tokenmaxIdentity.InstallLocation
+Uninstall-Channel "tokenmax-dev" $tokenmaxIdentity.Entry $tokenmaxIdentity.InstallLocation
 
 Write-Step "CROSS-CHECK: TokenMax Dev uninstall did not touch the official app"
 Assert-Unchanged "dev" $devIdentity.InstallLocation
@@ -281,7 +303,7 @@ Assert (-not (Test-Path $tokenmaxIdentity.InstallLocation)) "TokenMax Dev instal
 $devReady2 = Launch-AndVerifyReady "dev" $devIdentity.InstallLocation $devIdentity.ProtocolKey
 Assert ($devReady2.UserData -eq $devReady1.UserData) "official app's userData directory is the same across both runs (nothing migrated/reset it)"
 
-Uninstall-Channel "dev" $devEntry $devIdentity.InstallLocation
+Uninstall-Channel "dev" $devIdentity.Entry $devIdentity.InstallLocation
 
 Write-Host ""
 Write-Host "=== ALL WINDOWS DESKTOP E2E ASSERTIONS PASSED ===" -ForegroundColor Green
