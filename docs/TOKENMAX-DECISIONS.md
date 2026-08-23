@@ -184,3 +184,17 @@ install-directory-gone) with `Wait-Until`, a short poll loop with a 30s
 timeout — the same pattern `Wait-ForReady` already used for launch
 readiness, now applied consistently everywhere the script waits on an
 NSIS side effect.
+
+The very next confidence-gate run (all 3 attempts, same fix) failed
+immediately and identically on all three: `'Get-UninstallEntry' is not
+recognized as a name of a cmdlet`. Cause: the condition scriptblocks were
+built with `.GetNewClosure()`, which detaches a scriptblock from its
+lexical parent scope and gives it an independent snapshot of *variables*
+only -- it does not carry along script-scope *functions*, so
+`Get-UninstallEntry` (defined at the top of the script) became
+unreachable from inside the closure. `Wait-Until` is always invoked
+synchronously, in the same call stack, so no detachment was ever needed:
+a plain scriptblock literal already closes over its defining lexical
+scope (the same mechanism every `Where-Object { ... }` in this script
+already relies on to see enclosing variables). Removed `.GetNewClosure()`
+from all three call sites.

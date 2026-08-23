@@ -234,7 +234,7 @@ function Install-Channel($key) {
   Assert $done "installer for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
   Assert ($proc.ExitCode -eq 0) "installer for $($ch.ProductName) exited 0 (got $($proc.ExitCode))"
 
-  Wait-Until ({ $null -ne (Get-UninstallEntry $ch.ProductName) }.GetNewClosure()) 30 "Add/Remove Programs entry for $($ch.ProductName) to appear" | Out-Null
+  Wait-Until { $null -ne (Get-UninstallEntry $ch.ProductName) } 30 "Add/Remove Programs entry for $($ch.ProductName) to appear" | Out-Null
   $entry = Get-UninstallEntry $ch.ProductName
   if (-not $entry) {
     Write-Host "  diagnostic: no uninstall entry named '$($ch.ProductName)' found. Known HKCU DisplayNames:"
@@ -361,7 +361,7 @@ function Uninstall-Channel($key, $entry, $installLocation) {
   $done = $proc.WaitForExit($InstallTimeoutSeconds * 1000)
   Assert $done "uninstaller for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
 
-  Wait-Until ({ $null -eq (Get-UninstallEntry $ch.ProductName) }.GetNewClosure()) 30 "Add/Remove Programs entry for $($ch.ProductName) to disappear" | Out-Null
+  Wait-Until { $null -eq (Get-UninstallEntry $ch.ProductName) } 30 "Add/Remove Programs entry for $($ch.ProductName) to disappear" | Out-Null
   $stillThere = Get-UninstallEntry $ch.ProductName
   Assert ($null -eq $stillThere) "Add/Remove Programs entry for '$($ch.ProductName)' is gone after uninstall"
 }
@@ -407,7 +407,7 @@ function Run-SideBySideSequence($officialKey) {
 
   Write-Step "CROSS-CHECK: TokenMax Dev uninstall did not touch $($official.ProductName)"
   Assert-Unchanged $officialKey $officialIdentity.InstallLocation
-  Wait-Until ({ -not (Test-Path $tokenmaxIdentity.InstallLocation) }.GetNewClosure()) 30 "TokenMax Dev install directory to be removed" | Out-Null
+  Wait-Until { -not (Test-Path $tokenmaxIdentity.InstallLocation) } 30 "TokenMax Dev install directory to be removed" | Out-Null
   Assert (-not (Test-Path $tokenmaxIdentity.InstallLocation)) "TokenMax Dev install directory is gone"
 
   $officialReady2 = Launch-AndVerifyReady $officialKey $officialIdentity.InstallLocation $officialIdentity.ProtocolKey
