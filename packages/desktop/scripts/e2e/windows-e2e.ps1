@@ -59,6 +59,25 @@ function Assert($condition, $message) {
   Write-Host "  ok: $message" -ForegroundColor Green
 }
 
+# Extracts just the executable path from a Windows command-line string of
+# the form `"C:\path with spaces\foo.exe" [args]` or `C:\nospaces\foo.exe
+# [args]`. A real CI run proved a naive '^"|"$' quote-strip regex breaks
+# the moment anything (even just a trailing space) follows the closing
+# quote, since '"$' only matches a quote that is the literal last
+# character of the whole string. This parses the quoted-prefix form
+# directly instead of assuming the string ends right after it.
+function Get-CommandExecutablePath($commandLine) {
+  if (-not $commandLine) { return $null }
+  $trimmed = $commandLine.Trim()
+  if ($trimmed.StartsWith('"')) {
+    $endIdx = $trimmed.IndexOf('"', 1)
+    if ($endIdx -gt 0) { return $trimmed.Substring(1, $endIdx - 1) }
+  }
+  $spaceIdx = $trimmed.IndexOf(' ')
+  if ($spaceIdx -gt 0) { return $trimmed.Substring(0, $spaceIdx) }
+  return $trimmed
+}
+
 # One channel's expected identity, matching src/main/constants.ts and electron-builder.config.ts.
 $Channels = @{
   dev = @{
@@ -163,9 +182,9 @@ function Install-Channel($key) {
 
   $installLocation = $entry.InstallLocation
   if (-not $installLocation -and $entry.UninstallString) {
-    $installLocation = Split-Path -Parent ($entry.UninstallString -replace '^"|"$', '')
+    $installLocation = Split-Path -Parent (Get-CommandExecutablePath $entry.UninstallString)
   }
-  Assert ([bool]$installLocation) "an install directory was found for $($ch.ProductName)"
+  Assert ([bool]$installLocation) "an install directory was found for $($ch.ProductName) (raw UninstallString: $($entry.UninstallString))"
 
   return @{ Entry = $entry; InstallLocation = $installLocation }
 }
@@ -272,10 +291,10 @@ function Uninstall-Channel($key, $entry, $installLocation) {
   $ch = $Channels[$key]
   Write-Step "UNINSTALL: $($ch.ProductName)"
   if ($installLocation) { Stop-AllInstances $installLocation } # a running app can lock its own files
-  $uninstallString = $entry.UninstallString -replace '^"|"$', ''
-  Assert ([bool]$uninstallString) "found an UninstallString for $($ch.ProductName)"
+  $uninstallExe = Get-CommandExecutablePath $entry.UninstallString
+  Assert ([bool]$uninstallExe) "found an UninstallString for $($ch.ProductName)"
 
-  $proc = Start-Process -FilePath $uninstallString -ArgumentList "/S" -PassThru
+  $proc = Start-Process -FilePath $uninstallExe -ArgumentList "/S" -PassThru
   $done = $proc.WaitForExit($InstallTimeoutSeconds * 1000)
   Assert $done "uninstaller for $($ch.ProductName) finished within ${InstallTimeoutSeconds}s"
 
