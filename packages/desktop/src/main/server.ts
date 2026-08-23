@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { existsSync } from "node:fs"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
 import { getLogger } from "./logging"
@@ -60,7 +61,10 @@ export async function spawnLocalServer(
   password: string,
   options: SpawnLocalServerOptions,
 ) {
-  const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
+  // Try resources/main/sidecar.js first (copied by prebuild), then fallback to asar location
+  const sidecarInResources = join(process.resourcesPath, "main", "sidecar.js")
+  const sidecarInAsar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
+  const sidecar = existsSync(sidecarInResources) ? sidecarInResources : sidecarInAsar
   const child = utilityProcess.fork(sidecar, [], {
     cwd: process.cwd(),
     env: createSidecarEnv(),

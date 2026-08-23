@@ -16,6 +16,17 @@ Get-TokenMaxProcesses | ForEach-Object {
 }
 Start-Sleep -Seconds 1
 
+# Remove any stale auth marker from a previous instance BEFORE starting a new
+# process. Without this, the readiness-poll loop below can pick up a leftover
+# file (wrong port/password, possibly pointing at an unrelated zombie process)
+# before the freshly-started process has a chance to overwrite it with its own
+# real bound port. Real-file-write is the authoritative, event-driven signal
+# here (no sleep/guessing) - we just must not let a stale one satisfy the check.
+$liveTestAuthFile = Join-Path $script:UserData "live-test-auth.json"
+if (Test-Path -LiteralPath $liveTestAuthFile) {
+  Remove-Item -LiteralPath $liveTestAuthFile -Force -ErrorAction SilentlyContinue
+}
+
 $env:OPENCODE_PORT = "$Port"
 $env:OPENCODE_SERVER_PASSWORD = $Password
 $env:OPENCODE_LIVE_TEST = "1"

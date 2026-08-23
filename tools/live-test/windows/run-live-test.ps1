@@ -13,17 +13,34 @@ function Wait-SutSettled($Auth, [string]$SessionId, [array]$BaselineMsgs, [int]$
   # includes the reply).
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   $baseA = @($BaselineMsgs | Where-Object { $_.info.role -eq "assistant" }).Count
+  Write-Host "[Wait-SutSettled] baseA=$baseA deadline=$deadline"
+  # Immediate first poll (no sleep) to catch replies that complete before the first
+  # 800ms sleep - this handles the fast-reply race where model finishes during the
+  # initial sleep window.
+  try {
+    $msgs = @(Get-SutMessages -Auth $Auth -SessionId $SessionId)
+    $assistants = @($msgs | Where-Object { $_.info.role -eq "assistant" })
+    Write-Host "[Wait-SutSettled] poll0: total=$($msgs.Count) assistants=$($assistants.Count)"
+    if ($assistants.Count -gt $baseA) {
+      $last = $assistants[$assistants.Count - 1]
+      Write-Host "[Wait-SutSettled] new assistant detected, error=$($last.info.error) completed=$($last.info.time.completed)"
+      if ($last.info.error -or $last.info.time.completed) { return ,@($msgs) }
+    }
+  } catch { Write-Host "[Wait-SutSettled] poll0 error: $_" }
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 800
     try {
       $msgs = @(Get-SutMessages -Auth $Auth -SessionId $SessionId)
       $assistants = @($msgs | Where-Object { $_.info.role -eq "assistant" })
+      Write-Host "[Wait-SutSettled] poll: total=$($msgs.Count) assistants=$($assistants.Count) baseA=$baseA"
       if ($assistants.Count -gt $baseA) {
         $last = $assistants[$assistants.Count - 1]
+        Write-Host "[Wait-SutSettled] new assistant detected, error=$($last.info.error) completed=$($last.info.time.completed)"
         if ($last.info.error -or $last.info.time.completed) { return ,@($msgs) }
       }
-    } catch {}
+    } catch { Write-Host "[Wait-SutSettled] poll error: $_" }
   }
+  Write-Host "[Wait-SutSettled] timeout, returning final snapshot"
   try { return ,@(Get-SutMessages -Auth $Auth -SessionId $SessionId) } catch { return ,@() }
 }
 $Report = [ordered]@{
@@ -128,11 +145,11 @@ if ($auth -and $session) {
     if ($blob -match "FREE|PAYG|model|Route") { $Report.TOKENMAX_MODELS = "PASS" }
   } catch { $Report.errors += "tokenmax-models: $_" }
 
-  $okText = "Reply with exactly OK."
+$okText = "Reply with exactly OK."
   try {
     $base = @(Get-SutMessages -Auth $auth -SessionId $sid)
     $kidsBefore = @(Get-SutChildren -Auth $auth -SessionId $sid)
-    $null = Send-SutPromptAsync -Auth $auth -SessionId $sid -Text $okText
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $okText
     $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $base -TimeoutSec 75
     Shot "02-first-turn.png"
     $newAll = @(); if ($msgs.Count -gt $base.Count) { $newAll = @($msgs | Select-Object -Skip $base.Count) }
@@ -152,10 +169,10 @@ if ($auth -and $session) {
     }
   } catch { $Report.errors += "first-turn: $_" }
 
-  $arch = "Analyze this project's code architecture. Do not modify files. Use separate search, architecture, and verification workers."
+$arch = "Analyze this project's code architecture. Do not modify files. Use separate search, architecture, and verification workers."
   try {
     $base2 = @(Get-SutMessages -Auth $auth -SessionId $sid)
-    $null = Send-SutPromptAsync -Auth $auth -SessionId $sid -Text $arch
+    $null = Send-SutPrompt -Auth $auth -SessionId $sid -Text $arch
     $msgs = Wait-SutSettled -Auth $auth -SessionId $sid -BaselineMsgs $base2 -TimeoutSec 180
     $kids = @(Get-SutChildren -Auth $auth -SessionId $sid)
     $workers = Get-SutWorkers -Auth $auth

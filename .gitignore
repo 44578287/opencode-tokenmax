@@ -34,3 +34,5 @@ logs/
 live-test-auth.json
 *.bun-build
 tsconfig.tsbuildinfo
+
+packages/desktop/resources/main/
