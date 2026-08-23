@@ -212,3 +212,24 @@ not something assumed. The non-negotiable ordering rules in
 still hold; what changed is who reviews each gate, not the gate sequence
 itself. Work continues in the same style as R0: real code, real tests,
 real CI, honest "not yet done" over inflated status.
+
+### D-010: Automatic subagent model selection is opt-in via policy, not a default behavior change
+
+The user explicitly asked for genuinely working automatic model selection
+and sub-conversation dispatch -- not a status readout, not a copy of
+OpenCode, not an MCP wrapper -- built natively into OpenCode's own
+subagent mechanism (`tool/task.ts`'s existing `TaskTool`, which already
+spawns child sessions; R2 did not need to build that part).
+
+`task.ts` is shared runtime code across every Desktop channel (dev, beta,
+prod, tokenmax-dev all run the same compiled server) -- unlike R0's
+installer-level changes, there's no per-channel branch point here to keep
+the change scoped to TokenMax Dev alone. The isolation principle from
+R0/D-005 still applies, just through a different mechanism: the router
+only replaces the previous naive "copy the parent's model" fallback when
+`tokenmax.json`'s `router.enabled` is explicitly `true`. No policy file,
+or a policy file without that flag, means byte-for-byte the same behavior
+official OpenCode has always had -- verified by a dedicated regression
+test (`test/tool/task.test.ts`: "execute keeps the parent's model when
+TokenMax routing is not enabled by policy") alongside the positive case
+proving the router's selection is what's actually invoked.

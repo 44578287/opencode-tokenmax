@@ -45,8 +45,12 @@ state, not about using them.
   file (not an extension of OpenCode's own config schema — same isolation
   principle as R0's D-005), reusing `ConfigPaths`' existing project/global
   directory discovery. "Hot": re-read from disk on every `get()` call, no
-  restart needed. Supports per-provider and per-model `enabled` overrides
-  and billing threshold overrides.
+  restart needed. Supports per-provider and per-model `enabled` overrides,
+  billing threshold overrides, and (R2) `router.enabled`.
+- `opencode tokenmax` (`src/cli/cmd/tokenmax.ts`) — the first user-visible
+  surface: prints every connected model, its billing class, and whether
+  policy has it enabled. Manually verified against a real project directory
+  (not just unit tests).
 
 **Not yet done** (tracked, not silently skipped):
 - Availability engine currently only reports resources `Provider.Service`
@@ -54,13 +58,11 @@ state, not about using them.
   (what a user *could* configure), nor track availability history over time.
 - No persistence beyond the policy file itself (no usage/telemetry storage
   yet).
-- No native command surface (`/tokenmax-status` or an HTTP API equivalent)
-  wired up yet — the registry exists as a service, not yet exposed to a
-  client.
+- No HTTP API equivalent of `opencode tokenmax` yet (CLI only).
 - No telemetry (recording which resource was actually used per completed
   turn) yet.
 
-## R2 — Native Child Routing
+## R2 — Native Child Routing (first slice landed, ahead of R1 completing)
 
 Native child sessions, model selection, context package construction,
 child-to-root result flow, live model verification (the resource the
@@ -69,6 +71,39 @@ router picked must be the resource actually invoked — see
 anti-pattern), no user-message mutation, OmO compatibility (TokenMax
 chooses resources for workers OmO already decomposed, it doesn't
 re-decompose).
+
+Started before R1 fully finished per explicit user direction (full
+autonomy granted, D-009) prioritizing genuinely usable automatic model
+selection over remaining R1 polish. Native child sessions already existed
+upstream (`tool/task.ts`'s subagent dispatch) -- not rebuilt, just given
+real model selection at the one point it previously had none.
+
+**Landed**, real and test-covered:
+- `router.ts` — `TokenMaxRouter.Service`: rule-based selection (capability
+  filtering + cheapest-eligible-first from `TokenMaxRegistry`), not learned
+  -- historical-outcome weighting is R3's job, not this one. Always returns
+  a usable selection; never fails subagent dispatch even with zero eligible
+  resources (falls back to the caller-supplied model with a stated reason).
+- Wired into `tool/task.ts` at the exact point that previously just copied
+  the parent conversation's model onto every subagent with no logic at all.
+  Gated on `tokenmax.json`'s `router.enabled` (default off) -- this file is
+  shared runtime code across every channel, so behavior for anyone who
+  hasn't opted in must stay byte-for-byte identical to upstream. See
+  `TOKENMAX-DECISIONS.md` D-010.
+- "Live model verification" is asserted directly in
+  `test/tool/task.test.ts`: the test captures what the actual downstream
+  prompt call received and checks it against the router's selection, not
+  just the router's return value in isolation -- and a companion test
+  proves behavior is unchanged with routing off.
+
+**Not yet done**:
+- Context package construction and child-to-root result flow beyond what
+  `tool/task.ts` already did upstream.
+- OmO-compatibility verification (no OmO integration exists yet to test
+  against).
+- Per-agent capability requirements are currently a single hardcoded
+  `requireToolCall: true` for every subagent, not derived from what the
+  specific agent actually declares it needs.
 
 ## R2.5 — Reliability + Event Runtime
 

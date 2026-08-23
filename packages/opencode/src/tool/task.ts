@@ -14,6 +14,8 @@ import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { TokenMaxRouter } from "@/tokenmax/router"
+import { TokenMaxPolicy } from "@/tokenmax/policy"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -88,6 +90,8 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const tokenmaxRouter = yield* TokenMaxRouter.Service
+    const tokenmaxPolicy = yield* TokenMaxPolicy.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -178,9 +182,23 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
-      const model = next.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
+      const fallbackModel = { modelID: msg.info.modelID, providerID: msg.info.providerID }
+      let model = next.model
+      if (!model) {
+        // Automatic model selection (R2 -- Native Child Routing,
+        // docs/TOKENMAX-ROADMAP.md) only activates when the project's
+        // tokenmax.json explicitly opts in (policy.router.enabled === true);
+        // otherwise this keeps exactly OpenCode's existing behavior --
+        // inherit the parent conversation's model. Shared runtime code
+        // across every channel must never change behavior for someone who
+        // didn't ask for it. See docs/TOKENMAX-DECISIONS.md D-010.
+        const tokenmaxPolicyInfo = yield* tokenmaxPolicy.get()
+        model =
+          tokenmaxPolicyInfo.router?.enabled === true
+            ? yield* tokenmaxRouter
+                .select({ requireToolCall: true, fallback: fallbackModel })
+                .pipe(Effect.map((selection) => ({ providerID: selection.providerID, modelID: selection.modelID })))
+            : fallbackModel
       }
       const metadata = {
         parentSessionId: ctx.sessionID,

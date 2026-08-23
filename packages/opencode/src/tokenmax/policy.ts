@@ -48,9 +48,23 @@ export const BillingThresholds = Schema.Struct({
 })
 export type BillingThresholds = Schema.Schema.Type<typeof BillingThresholds>
 
+// R2 -- Native Child Routing (docs/TOKENMAX-ROADMAP.md). `router.enabled`
+// is an explicit, per-project opt-in: automatic subagent model selection
+// (see router.ts) only activates when this is `true`. Without a
+// tokenmax.json, or with `router` absent/false, subagent dispatch behaves
+// exactly as upstream OpenCode always has -- this file is shared runtime
+// code across every channel (dev/beta/prod/tokenmax-dev), so a behavior
+// change here must never happen to someone who didn't ask for it. Same
+// isolation principle as R0's D-005, extended to R2 in D-010.
+export const RouterPolicy = Schema.Struct({
+  enabled: Schema.optional(Schema.Boolean),
+})
+export type RouterPolicy = Schema.Schema.Type<typeof RouterPolicy>
+
 export const Info = Schema.Struct({
   providers: Schema.optional(Schema.Record(Schema.String, ProviderOverride)),
   billing: Schema.optional(BillingThresholds),
+  router: Schema.optional(RouterPolicy),
 })
 export type Info = Schema.Schema.Type<typeof Info>
 

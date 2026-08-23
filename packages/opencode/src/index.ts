@@ -28,6 +28,7 @@ import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
+import { TokenMaxCommand } from "./cli/cmd/tokenmax"
 import { Heap } from "./cli/heap"
 
 const args = hideBin(process.argv)
@@ -93,6 +94,7 @@ const cli = yargs(args)
   .command(ServeCommand)
   .command(WebCommand)
   .command(ModelsCommand)
+  .command(TokenMaxCommand)
   .command(StatsCommand)
   .command(ExportCommand)
   .command(ImportCommand)

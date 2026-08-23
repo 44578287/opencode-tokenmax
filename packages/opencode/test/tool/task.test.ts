@@ -20,6 +20,8 @@ import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { TokenMaxRouter } from "@/tokenmax/router"
+import { TokenMaxPolicy } from "@/tokenmax/policy"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -51,6 +53,8 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       Database.node,
       RuntimeFlags.node,
       Ripgrep.node,
+      TokenMaxRouter.node,
+      TokenMaxPolicy.node,
     ]),
     [[RuntimeFlags.node, RuntimeFlags.layer(flags)]],
   )
@@ -501,6 +505,115 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).not.toBe("ses_missing")
       expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
       expect(seen?.sessionID).toBe(result.metadata.sessionId)
+    }),
+  )
+
+  // R2 -- Native Child Routing (docs/TOKENMAX-ROADMAP.md). "Live model
+  // verification": the model TokenMax's router selects must be the exact
+  // model actually invoked (TOKENMAX-RELIABILITY.md's "router selects A but
+  // invocation uses B" anti-pattern) -- so this asserts against what the
+  // prompt call actually received (via stubOps' onPrompt capture), not just
+  // against the router's own return value in isolation.
+  it.instance(
+    "execute uses TokenMax's selected model when policy opts the router in",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ text: "done", onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        // ref (the parent message's model, "test/test-model") is not a
+        // configured provider here -- only "cheap" is -- so if routing
+        // didn't activate, the child prompt would carry a model from a
+        // provider that isn't even connected. Seeing "cheap/cheap-model" is
+        // proof the router's selection is what actually got invoked.
+        expect(seen?.model?.providerID).toBe(ProviderV2.ID.make("cheap"))
+        expect(seen?.model?.modelID).toBe(ModelV2.ID.make("cheap-model"))
+      }),
+    {
+      config: {
+        enabled_providers: ["cheap"],
+        provider: {
+          cheap: {
+            name: "Cheap Co",
+            id: "cheap",
+            env: [],
+            npm: "@ai-sdk/openai-compatible",
+            models: {
+              "cheap-model": {
+                id: "cheap-model",
+                name: "Cheap Model",
+                attachment: false,
+                reasoning: false,
+                temperature: false,
+                tool_call: true,
+                release_date: "2025-01-01",
+                limit: { context: 100_000, output: 10_000 },
+                cost: { input: 0, output: 0 },
+                options: {},
+              },
+            },
+            options: { apiKey: "test-key", baseURL: "http://127.0.0.1:0" },
+          },
+        },
+      },
+      init: (directory) =>
+        Effect.tryPromise(() => Bun.write(`${directory}/tokenmax.json`, JSON.stringify({ router: { enabled: true } }))).pipe(
+          Effect.orDie,
+        ),
+    },
+  )
+
+  it.instance("execute keeps the parent's model when TokenMax routing is not enabled by policy", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ text: "done", onPrompt: (input) => (seen = input) })
+
+      yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      // No tokenmax.json at all -- must behave exactly like upstream
+      // OpenCode always has: inherit the parent conversation's model.
+      expect(seen?.model?.providerID).toBe(ref.providerID)
+      expect(seen?.model?.modelID).toBe(ref.modelID)
     }),
   )
 

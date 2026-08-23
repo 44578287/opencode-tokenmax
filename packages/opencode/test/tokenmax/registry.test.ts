@@ -10,6 +10,10 @@ import { testEffect } from "../lib/effect"
 const registryConfig = {
   formatter: false,
   lsp: false,
+  // Ambient env credentials (e.g. a GitHub token) in some environments can
+  // auto-connect real providers like github-models -- restrict explicitly
+  // so registry contents are deterministic and only reflect these test doubles.
+  enabled_providers: ["free", "premium"],
   provider: {
     free: {
       name: "Free Co",

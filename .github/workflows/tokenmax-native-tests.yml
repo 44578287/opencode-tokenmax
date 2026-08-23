@@ -18,6 +18,11 @@ on:
       - "packages/opencode/test/tokenmax/**"
       - "packages/opencode/src/provider/**"
       - "packages/opencode/src/config/**"
+      - "packages/opencode/src/tool/task.ts"
+      - "packages/opencode/src/tool/registry.ts"
+      - "packages/opencode/test/tool/task.test.ts"
+      - "packages/opencode/src/cli/cmd/tokenmax.ts"
+      - "packages/opencode/src/effect/app-runtime.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
@@ -43,6 +48,16 @@ jobs:
       - name: Run TokenMax native tests
         working-directory: packages/opencode
         run: bun test --timeout 30000 test/tokenmax/
+        timeout-minutes: 10
+
+      - name: Run TaskTool integration tests (TokenMax router wiring)
+        working-directory: packages/opencode
+        run: bun test --timeout 30000 test/tool/task.test.ts
+        timeout-minutes: 10
+
+      - name: Run R0 regression pass (prompt loop unaffected by router changes)
+        working-directory: packages/opencode
+        run: bun test --timeout 30000 test/session/prompt.test.ts -t "R0 regression"
         timeout-minutes: 10
 
       - name: Typecheck (packages/opencode)
