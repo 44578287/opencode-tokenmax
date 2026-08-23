@@ -106,6 +106,10 @@ const getBase = (appId: string): Configuration => ({
     perMachine: false,
     installerIcon: `resources/icons/icon.ico`,
     installerHeaderIcon: `resources/icons/icon.ico`,
+    // See resources/installer.nsh: forces the per-user install directory to
+    // be product-name-specific instead of every channel colliding into the
+    // same directory (TokenMax regression 3.5).
+    include: "resources/installer.nsh",
   },
   linux: {
     icon: `resources/icons`,
