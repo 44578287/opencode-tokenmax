@@ -36,7 +36,14 @@ permissions:
 jobs:
   r0-regression:
     name: R0 regression pass (packages/opencode, Windows)
-    runs-on: blacksmith-4vcpu-windows-2025
+    # Standard GitHub-hosted runner, not the blacksmith-4vcpu-windows-2025
+    # label test.yml/publish.yml use: jobs queued against that label sat
+    # queued indefinitely here with zero contention (no other run in
+    # progress), which points at a runner-group/connectivity issue outside
+    # GitHub Actions' own scheduler rather than genuine capacity contention.
+    # windows-2025 is what publish.yml's own arm64 matrix leg already uses
+    # successfully in this repo.
+    runs-on: windows-2025
     defaults:
       run:
         shell: bash
@@ -54,7 +61,14 @@ jobs:
 
   desktop-e2e:
     name: Windows Desktop E2E (package/install/launch/uninstall, side-by-side identity)
-    runs-on: blacksmith-4vcpu-windows-2025
+    # Standard GitHub-hosted runner, not the blacksmith-4vcpu-windows-2025
+    # label test.yml/publish.yml use: jobs queued against that label sat
+    # queued indefinitely here with zero contention (no other run in
+    # progress), which points at a runner-group/connectivity issue outside
+    # GitHub Actions' own scheduler rather than genuine capacity contention.
+    # windows-2025 is what publish.yml's own arm64 matrix leg already uses
+    # successfully in this repo.
+    runs-on: windows-2025
     defaults:
       run:
         shell: pwsh
