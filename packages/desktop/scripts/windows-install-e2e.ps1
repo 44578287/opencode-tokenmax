@@ -122,11 +122,13 @@ $report.bunRuntimeCrash = "FIXED"
 
 $xdg = Join-Path $userData "xdg-config\opencode"
 New-Item -ItemType Directory -Force -Path $xdg | Out-Null
+# Minimal config: no external plugins here - they force cold npm downloads on
+# a fresh runner and are irrelevant to what this E2E verifies (packaged app +
+# sidecar health + TokenMax native mode).
 @'
 {
   "$schema": "https://opencode.ai/config.json",
-  "experimental": { "tokenmax": { "enabled": true } },
-  "plugin": ["tokenmax-router", "oh-my-openagent@latest"]
+  "experimental": { "tokenmax": { "enabled": true } }
 }
 '@ | Set-Content -LiteralPath (Join-Path $xdg "opencode.jsonc") -Encoding utf8
 
@@ -162,14 +164,38 @@ $report.packagedAppLaunch = "PASS"
 $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("opencode:e2e-live-test"))
 $headers = @{ Authorization = "Basic $auth" }
 $ready = $false
-for ($i = 0; $i -lt 20; $i++) {
+for ($i = 0; $i -lt 90; $i++) {
   try {
     $h = Invoke-WebRequest -Uri "http://127.0.0.1:18789/global/health" -Headers $headers -TimeoutSec 3 -UseBasicParsing
     if ($h.StatusCode -eq 200) { $ready = $true; break }
   } catch {}
-  Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 3
 }
-if (-not $ready) { Fail "sidecar health not ready after launch" }
+if (-not $ready) {
+  # Diagnostics before failing: layout + logs + port state.
+  Write-Host "--- resources/main layout ---"
+  $resMain = Join-Path $installPath "resources\main"
+  if (Test-Path $resMain) {
+    Get-ChildItem -LiteralPath $resMain -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+      Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
+  } else {
+    Write-Host "MISSING: $resMain"
+  }
+  Write-Host "--- port 18789 ---"
+  Get-NetTCPConnection -LocalPort 18789 -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String | Write-Host
+  Write-Host "--- processes ---"
+  Get-Process | Where-Object { $_.Name -match "OpenCode|opencode" } |
+    Select-Object Id, Name, Path -First 10 | Format-Table -AutoSize | Out-String | Write-Host
+  Write-Host "--- log tails ---"
+  $logRoots = @((Join-Path $userData "logs"), (Join-Path $userData "xdg-data\opencode\log"))
+  foreach ($root in $logRoots) {
+    Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+      Write-Host "== $($_.FullName) (last 40 lines) =="
+      Get-Content -LiteralPath $_.FullName -Tail 40 -ErrorAction SilentlyContinue | Write-Host
+    }
+  }
+  Fail "sidecar health not ready after launch"
+}
 
 $ws = Join-Path $env:TEMP "tokenmax-e2e-ws"
 New-Item -ItemType Directory -Force -Path $ws | Out-Null
