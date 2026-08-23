@@ -79,6 +79,20 @@ PACKAGE -> INSTALL -> VERIFY REGISTRY/PATH/NAME/PROTOCOL -> LAUNCH -> READY
 with every step actually executed and its output actually inspected, not
 inferred from exit code 0 on the packaging step alone.
 
+**Root cause, found and fixed during R0** (`scripts/e2e/windows-e2e.ps1`
+against real Windows CI runs): electron-builder's NSIS target only derives
+the per-user install directory name from `productName` when
+`!oneClick || isPerMachine`. Every channel of this Desktop app builds with
+`oneClick: true, perMachine: false`, so that condition is never true, and
+the installer always falls back to the sanitized package.json `name`
+(`@opencode-ai/desktop` -> `@opencode-aidesktop`) — identical for every
+channel. This is genuinely pre-existing upstream behavior: any two
+channels installed side by side would have collided into the same
+directory before TokenMax's `tokenmax-dev` channel existed. Fixed via
+`resources/installer.nsh`'s `customInit` macro, which overwrites `$INSTDIR`
+with the already-correct per-channel `PRODUCT_FILENAME` define. See
+`TOKENMAX-DECISIONS.md` D-005.
+
 ### 3.6 — Mid-run permanent BUSY (ORPHAN_BUSY)
 
 A task would run, then go quiet with no further output while the UI stayed

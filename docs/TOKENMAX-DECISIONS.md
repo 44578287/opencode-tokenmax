@@ -104,3 +104,18 @@ one or any future one), it must answer yes to all of:
    Bun-only import reaching the Electron main/Node process)?
 
 No large-scale cherry-picking. Each module is evaluated individually.
+
+### D-005: Every Desktop channel gets its own NSIS install directory
+
+Discovered via real Windows CI (`tokenmax-desktop-e2e.yml` run #7): after
+installing "dev" then "tokenmax-dev", TokenMax Dev's install directory
+still contained `OpenCode Dev.exe` — both channels had installed into the
+identical directory (regression 3.5, root-caused — see
+`TOKENMAX-RELIABILITY.md` 3.5). Fixed with `resources/installer.nsh` (an
+NSIS `customInit` macro, wired in via `electron-builder.config.ts`'s
+`nsis.include`) that forces `$INSTDIR` to a per-channel path derived from
+`PRODUCT_FILENAME`. Applies uniformly to all four channels, since the
+underlying collision was never TokenMax-specific — verified via run #8,
+the first fully green Windows Desktop E2E pass (package, install for both
+channels, identity/registry/protocol verification, launch, userData
+isolation, uninstall, and cross-channel checks throughout).
