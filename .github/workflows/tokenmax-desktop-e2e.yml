@@ -2,12 +2,21 @@ name: tokenmax-desktop-e2e
 
 # Real Windows Desktop E2E for TokenMax's R0 gate (master brief section 45,
 # docs/TOKENMAX-RELIABILITY.md). This is deliberately separate from the
-# existing `test`/`publish` workflows: it packages TWO channels (the
-# official "dev" channel and TokenMax Dev), actually installs both,
-# verifies their identities never collide, launches and exits each one,
-# uninstalls TokenMax Dev, and re-verifies the official app is untouched
-# throughout -- see packages/desktop/scripts/e2e/windows-e2e.ps1 for the
-# full, assertion-by-assertion sequence.
+# existing `test`/`publish` workflows: it packages THREE channels (the real
+# official "prod" identity, the "dev" pre-release channel, and TokenMax
+# Dev), actually installs prod + TokenMax Dev side by side (the
+# authoritative pair -- "prod" is the real official OpenCode identity, not
+# "dev"), verifies their identities never collide, launches and exits each
+# one, uninstalls TokenMax Dev, and re-verifies prod is untouched
+# throughout; it then repeats the same sequence for dev + TokenMax Dev as
+# secondary, additional coverage -- see
+# packages/desktop/scripts/e2e/windows-e2e.ps1 for the full,
+# assertion-by-assertion sequence.
+#
+# Both jobs run on a 3-way matrix ("attempt": 1/2/3), each an independent,
+# clean Windows runner building and testing the same commit -- an R0
+# confidence gate, not flake-tolerant retries: every attempt must pass on
+# its own.
 #
 # `workflow_dispatch` is the intended trigger long-term (R0 verification
 # infrastructure, not a required check on every push). It's also gated on
@@ -35,7 +44,11 @@ permissions:
 
 jobs:
   r0-regression:
-    name: R0 regression pass (packages/opencode, Windows)
+    name: R0 regression pass (packages/opencode, Windows, attempt ${{ matrix.attempt }})
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3]
     # Standard GitHub-hosted runner, not the blacksmith-4vcpu-windows-2025
     # label test.yml/publish.yml use: jobs queued against that label sat
     # queued indefinitely here with zero contention (no other run in
@@ -60,7 +73,11 @@ jobs:
         timeout-minutes: 15
 
   desktop-e2e:
-    name: Windows Desktop E2E (package/install/launch/uninstall, side-by-side identity)
+    name: Windows Desktop E2E (prod+TokenMax Dev authoritative, dev+TokenMax Dev secondary, attempt ${{ matrix.attempt }})
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3]
     # Standard GitHub-hosted runner, not the blacksmith-4vcpu-windows-2025
     # label test.yml/publish.yml use: jobs queued against that label sat
     # queued indefinitely here with zero contention (no other run in
