@@ -9,11 +9,22 @@ name: tokenmax-desktop-e2e
 # throughout -- see packages/desktop/scripts/e2e/windows-e2e.ps1 for the
 # full, assertion-by-assertion sequence.
 #
-# `workflow_dispatch`-only for now: this is R0 verification infrastructure,
-# not a required check on every push yet.
+# `workflow_dispatch` is the intended trigger long-term (R0 verification
+# infrastructure, not a required check on every push). It's also gated on
+# `push` to this branch for now: GitHub only lets workflow_dispatch target a
+# workflow that already exists on the repo's default branch, and this one
+# deliberately doesn't merge to `dev` -- see docs/TOKENMAX-DECISIONS.md.
+# Remove the `push` trigger once this is merged and can be workflow_dispatch'd.
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - tokenmax-rebuild/main
+    paths:
+      - ".github/workflows/tokenmax-desktop-e2e.yml"
+      - "packages/desktop/**"
+      - "packages/opencode/test/session/prompt.test.ts"
 
 concurrency:
   group: tokenmax-desktop-e2e-${{ github.ref }}
