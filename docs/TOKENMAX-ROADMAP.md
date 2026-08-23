@@ -25,13 +25,40 @@ WINDOWS DESKTOP INSTALL/LAUNCH: PASS
 OFFICIAL SIDE-BY-SIDE:          PASS
 ```
 
-## R1 — Native Resource Core
+## R1 — Native Resource Core (in progress)
 
 Resource registry (provider/model/variant), availability engine, billing
 classes, capability metadata, persistence, telemetry, native commands
 (`/tokenmax-status` etc.), hot policy loading. Explicitly **no automatic
 child dispatch** yet — R1 is about knowing what resources exist and their
 state, not about using them.
+
+**Landed** (`packages/opencode/src/tokenmax/`), real and test-covered:
+- `registry.ts` — `TokenMaxRegistry.Service`, a thin composition layer over
+  `Provider.Service` (deliberately not a reimplementation of provider/model
+  discovery — see `TOKENMAX-DECISIONS.md`'s reuse criteria). Capability
+  metadata and raw cost come straight from `Provider.Model`.
+- `billing.ts` — billing CLASS categorization (free/economy/standard/premium)
+  computed from `Provider.Model`'s existing cost data, thresholds
+  overridable via policy.
+- `policy.ts` — `TokenMaxPolicy.Service`: TokenMax's own `tokenmax.json[c]`
+  file (not an extension of OpenCode's own config schema — same isolation
+  principle as R0's D-005), reusing `ConfigPaths`' existing project/global
+  directory discovery. "Hot": re-read from disk on every `get()` call, no
+  restart needed. Supports per-provider and per-model `enabled` overrides
+  and billing threshold overrides.
+
+**Not yet done** (tracked, not silently skipped):
+- Availability engine currently only reports resources `Provider.Service`
+  already connected — it does not yet surface the not-yet-connected catalog
+  (what a user *could* configure), nor track availability history over time.
+- No persistence beyond the policy file itself (no usage/telemetry storage
+  yet).
+- No native command surface (`/tokenmax-status` or an HTTP API equivalent)
+  wired up yet — the registry exists as a service, not yet exposed to a
+  client.
+- No telemetry (recording which resource was actually used per completed
+  turn) yet.
 
 ## R2 — Native Child Routing
 

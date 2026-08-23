@@ -198,3 +198,17 @@ a plain scriptblock literal already closes over its defining lexical
 scope (the same mechanism every `Where-Object { ... }` in this script
 already relies on to see enclosing variables). Removed `.GetNewClosure()`
 from all three call sites.
+
+### D-009: R0 gate accepted; full autonomy granted for R1 onward
+
+R0's corrected report (commit `183d46f`, all 3 review blockers fixed, 3/3
+confidence-gate CI passes) was accepted. The user then explicitly
+delegated ongoing development of the entire roadmap (R1 through R6) with
+full autonomy over planning and testing, rather than requiring gate
+approval before each phase as the original process rules specified — a
+deliberate, explicit relaxation of that process by the person who set it,
+not something assumed. The non-negotiable ordering rules in
+`TOKENMAX-ROADMAP.md` (baseline before Router, R2.5 not skipped ahead)
+still hold; what changed is who reviews each gate, not the gate sequence
+itself. Work continues in the same style as R0: real code, real tests,
+real CI, honest "not yet done" over inflated status.

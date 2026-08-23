@@ -1,0 +1,51 @@
+name: tokenmax-native-tests
+
+# Real test coverage for TokenMax's native code (packages/opencode/src/tokenmax/),
+# separate from tokenmax-desktop-e2e.yml (which is specifically the R0
+# Desktop install/launch/uninstall gate). This workflow grows alongside the
+# roadmap (docs/TOKENMAX-ROADMAP.md) as R1 and later phases land more native
+# code -- unlike the Desktop E2E, this doesn't need a full Windows runner or
+# a package/install cycle, so it runs fast on every relevant push.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - tokenmax-rebuild/main
+    paths:
+      - ".github/workflows/tokenmax-native-tests.yml"
+      - "packages/opencode/src/tokenmax/**"
+      - "packages/opencode/test/tokenmax/**"
+      - "packages/opencode/src/provider/**"
+      - "packages/opencode/src/config/**"
+
+concurrency:
+  group: tokenmax-native-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: TokenMax native tests + typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run TokenMax native tests
+        working-directory: packages/opencode
+        run: bun test --timeout 30000 test/tokenmax/
+        timeout-minutes: 10
+
+      - name: Typecheck (packages/opencode)
+        working-directory: packages/opencode
+        run: bun run typecheck
+        timeout-minutes: 10
