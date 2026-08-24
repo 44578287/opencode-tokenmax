@@ -17,17 +17,40 @@ const billingColor: Record<string, string> = {
   premium: UI.Style.TEXT_WARNING,
 }
 
+const outcomeColor: Record<string, string> = {
+  success: UI.Style.TEXT_SUCCESS,
+  error: UI.Style.TEXT_DANGER,
+}
+
+const sourceLabel: Record<string, string> = {
+  explicit: "agent-pinned",
+  router: "auto-selected",
+  inherited: "inherited from parent",
+}
+
+function timeAgo(ms: number) {
+  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000))
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
 export const TokenMaxCommand = effectCmd({
   command: "tokenmax",
   describe: "show the TokenMax resource registry: connected models, billing class, policy state",
   handler: Effect.fn("Cli.tokenmax")(function* () {
     const { TokenMaxRegistry } = yield* Effect.promise(() => import("@/tokenmax/registry"))
     const { TokenMaxPolicy } = yield* Effect.promise(() => import("@/tokenmax/policy"))
+    const { TokenMaxTelemetry } = yield* Effect.promise(() => import("@/tokenmax/telemetry"))
 
     const registry = yield* TokenMaxRegistry.Service
     const policy = yield* TokenMaxPolicy.Service
+    const telemetry = yield* TokenMaxTelemetry.Service
 
-    const [resources, policyInfo] = yield* Effect.all([registry.list(), policy.get()])
+    const [resources, policyInfo, telemetryEvents] = yield* Effect.all([registry.list(), policy.get(), telemetry.list()])
 
     const providerCount = new Set(resources.map((r) => r.providerID)).size
     UI.println(
@@ -73,6 +96,26 @@ export const TokenMaxCommand = effectCmd({
           "  no connected providers -- run `opencode models` or configure a provider first" +
           UI.Style.TEXT_NORMAL,
       )
+    }
+
+    if (telemetryEvents.length > 0) {
+      process.stdout.write(EOL)
+      UI.println(
+        UI.Style.TEXT_NORMAL_BOLD +
+          "Recent subagent runs" +
+          UI.Style.TEXT_NORMAL +
+          UI.Style.TEXT_DIM +
+          ` -- last ${Math.min(10, telemetryEvents.length)} of ${telemetryEvents.length}` +
+          UI.Style.TEXT_NORMAL,
+      )
+      for (const event of telemetryEvents.slice(-10).reverse()) {
+        const color = outcomeColor[event.outcome] ?? UI.Style.TEXT_NORMAL
+        const source = sourceLabel[event.modelSource] ?? event.modelSource
+        process.stdout.write(
+          `  ${timeAgo(event.timestamp)}  ${event.subagentType}  ${event.providerID}/${event.modelID}  ${UI.Style.TEXT_DIM}(${source})${UI.Style.TEXT_NORMAL}  ${color}${event.outcome}${UI.Style.TEXT_NORMAL}` +
+            EOL,
+        )
+      }
     }
   }),
 })
