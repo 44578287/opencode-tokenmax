@@ -25,6 +25,20 @@ WINDOWS DESKTOP INSTALL/LAUNCH: PASS
 OFFICIAL SIDE-BY-SIDE:          PASS
 ```
 
+**Reaffirmed during R2.5** (`packages/desktop/src/main/channel.ts` +
+`channel.test.ts`, see `TOKENMAX-DECISIONS.md` D-013): the gate above was
+previously verified only by the (real, but slow, workflow_dispatch-only)
+Windows E2E confidence gate. The isolation mechanism itself -- every one
+of the embedded server's four XDG directories rooted under a
+tokenmax-dev-only path, not just Electron's own `userData` -- had no fast
+CI coverage of its own. Extracted the pure derivation logic out of
+`main/index.ts`'s Electron bootstrap and gave it dedicated tests, now
+running on every relevant push via `tokenmax-native-tests.yml`, alongside
+the existing `electron-builder.config.test.ts` (which also had no CI
+coverage until now). Confirmed unaffected by every R1/R2/R2.5 change
+landed so far, since none of that work touches packaging or the desktop
+bootstrap -- it's all shared runtime code within `packages/opencode`.
+
 ## R1 — Native Resource Core (in progress)
 
 Resource registry (provider/model/variant), availability engine, billing

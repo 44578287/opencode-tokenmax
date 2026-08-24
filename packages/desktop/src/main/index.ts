@@ -13,7 +13,7 @@ import contextMenu from "electron-context-menu"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
-import { APP_IDS, APP_NAMES, CHANNEL, PROTOCOL_SCHEMES } from "./constants"
+import { APP_IDS, APP_NAMES, CHANNEL, PROTOCOL_SCHEMES, tokenmaxXdgDirs } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
@@ -134,13 +134,7 @@ const main = Effect.gen(function* () {
   // directory. Skipped when TEST_ONBOARDING already provides an isolated,
   // ephemeral root of its own.
   if (app.isPackaged && CHANNEL === "tokenmax-dev" && !onboardingTestRoot) {
-    const tokenmaxXdgRoot = join(app.getPath("appData"), appId, "xdg")
-    const xdgDirs = {
-      XDG_DATA_HOME: join(tokenmaxXdgRoot, "data"),
-      XDG_CONFIG_HOME: join(tokenmaxXdgRoot, "config"),
-      XDG_CACHE_HOME: join(tokenmaxXdgRoot, "cache"),
-      XDG_STATE_HOME: join(tokenmaxXdgRoot, "state"),
-    }
+    const xdgDirs = tokenmaxXdgDirs(app.getPath("appData"), appId)
     for (const [key, value] of Object.entries(xdgDirs)) {
       mkdirSync(value, { recursive: true })
       process.env[key] = value

@@ -33,6 +33,12 @@ on:
       - "packages/opencode/src/server/routes/instance/httpapi/api.ts"
       - "packages/opencode/src/server/routes/instance/httpapi/server.ts"
       - "packages/opencode/test/server/httpapi-tokenmax.test.ts"
+      - "packages/desktop/src/main/channel.ts"
+      - "packages/desktop/src/main/channel.test.ts"
+      - "packages/desktop/src/main/constants.ts"
+      - "packages/desktop/src/main/index.ts"
+      - "packages/desktop/electron-builder.config.ts"
+      - "packages/desktop/electron-builder.config.test.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
@@ -83,4 +89,27 @@ jobs:
       - name: Typecheck (packages/opencode)
         working-directory: packages/opencode
         run: bun run typecheck
+        timeout-minutes: 10
+
+  desktop-unit-tests:
+    name: Desktop side-by-side identity unit tests (fast, no Windows/Electron runtime needed)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run channel/XDG isolation tests (docs/TOKENMAX-RELIABILITY.md's "shared writable database" anti-pattern)
+        working-directory: packages/desktop
+        run: bun test --timeout 30000 src/main/channel.test.ts
+        timeout-minutes: 10
+
+      - name: Run electron-builder config tests (per-channel app id / product name / protocol)
+        working-directory: packages/desktop
+        run: bun test --timeout 30000 electron-builder.config.test.ts
         timeout-minutes: 10

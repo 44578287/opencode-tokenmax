@@ -307,3 +307,56 @@ live DAG/worker/verification state, and actually calling
 `evaluateStop()`/`detectEarlyStop()` against a real model turn, is
 tracked as "not yet done" in `TOKENMAX-ROADMAP.md`'s R2.5 section rather
 than silently assumed.
+
+### D-013: side-by-side data isolation gets fast unit coverage, not just the Windows E2E gate
+
+Prompted by an explicit user check-in on coexistence ("繼續，以及到時候編譯出來版本，要可以與原本的OPENCODE可以並存(就是互不影響)" --
+"continue, and the compiled build needs to be able to coexist with the
+original OpenCode, i.e. not affect each other"). Re-verified the R0 gate
+end to end rather than assuming it still held: confirmed
+`electron-builder.config.test.ts` (app id/product name/protocol per
+channel) still passes unaffected by every R1/R2/R2.5 change so far, since
+none of it touches packaging.
+
+Went one level deeper while re-verifying and found a real, previously
+untested gap: `packages/core/src/global.ts` hardcodes its XDG app
+directory name to `"opencode"` regardless of channel, so
+`Global.Path.data`/`.config`/`.cache`/`.state` -- and everything built on
+them, including `Storage.Service` (TokenMax's own telemetry) and
+`Database.node` -- resolve to the SAME OS-default XDG paths for every
+channel unless something overrides all four `XDG_*_HOME` env vars before
+the embedded server starts. `main/index.ts` already does override all
+four, correctly, for `CHANNEL === "tokenmax-dev"` (rooting them under
+`app.getPath("appData")/{tokenmax appId}/xdg/*`) -- this was already
+built in R0, it just had zero automated test coverage. The only
+verification of it was the Windows E2E confidence gate
+(`tokenmax-desktop-e2e.yml`), which is real but slow and
+`workflow_dispatch`-gated, not part of the fast pass that runs on every
+push. `docs/TOKENMAX-RELIABILITY.md`'s anti-pattern list already names
+exactly the failure mode this logic prevents: "a shared writable database
+between the official app and a TokenMax dev build."
+
+Extracted the pure directory-derivation logic (`tokenmaxXdgDirs()`) out
+of `main/index.ts`'s Electron bootstrap into a new, Electron-import-free
+`main/channel.ts` (the rest of the previous `constants.ts` -- `APP_IDS`,
+`APP_NAMES`, `CHANNEL`, `PROTOCOL_SCHEMES` -- moved alongside it for the
+same reason; only `UPDATER_ENABLED`, which genuinely needs
+`app.isPackaged`, stays in `constants.ts`, now just re-exporting the rest
+for backward compatibility). `main/constants.ts` itself imports
+`"electron"` at module scope, which throws under plain `bun test` outside
+a real Electron process -- that's why this logic had no unit test before:
+it wasn't unit-testable in its original location. `channel.test.ts`
+covers: every derived dir is rooted under the tokenmax-dev app id (never
+the bare `appData` path); all four dirs are mutually distinct; a
+different app id (e.g. the official prod channel's) produces entirely
+disjoint paths; the function is pure (same inputs -> same outputs); and
+paths use the platform separator (Windows correctness, since this code
+runs on Windows in the real packaged app).
+
+Wired both `channel.test.ts` and the previously-uncovered
+`electron-builder.config.test.ts` into a new `desktop-unit-tests` job in
+`tokenmax-native-tests.yml` -- fast (`ubuntu-latest`, no Windows or actual
+Electron runtime needed), runs on every relevant push, and does not
+replace the Windows E2E gate (still the authoritative real-install
+verification) but catches a regression in the isolation *logic* far
+earlier and far cheaper than a full Windows E2E run would.
