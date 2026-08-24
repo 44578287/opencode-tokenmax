@@ -52,13 +52,20 @@ state, not about using them.
   policy has it enabled. Manually verified against a real project directory
   (not just unit tests).
 
+- `GET /tokenmax/status` (`src/server/routes/instance/httpapi/groups/tokenmax.ts`
+  + `handlers/tokenmax.ts`) — the HTTP equivalent of `opencode tokenmax`,
+  reusing the exact same three services (registry/policy/telemetry) and
+  reusing existing schemas (`Provider.Model`'s capability/cost field
+  schemas, `TokenMaxTelemetry.Event`) rather than redeclaring parallel
+  shapes. Wired into the real `InstanceHttpApi`/`app` service graph in
+  `server.ts`, not test-only. Test-covered end to end through the actual
+  server app (`test/server/httpapi-tokenmax.test.ts`), not just the
+  handler function in isolation.
+
 **Not yet done** (tracked, not silently skipped):
 - Availability engine currently only reports resources `Provider.Service`
   already connected — it does not yet surface the not-yet-connected catalog
   (what a user *could* configure), nor track availability history over time.
-- No HTTP API equivalent of `opencode tokenmax` yet (CLI only).
-- `opencode tokenmax` doesn't yet surface telemetry history (`telemetry.ts`,
-  landed under R2 below) — status output is still registry-only.
 
 ## R2 — Native Child Routing (first slice landed, ahead of R1 completing)
 

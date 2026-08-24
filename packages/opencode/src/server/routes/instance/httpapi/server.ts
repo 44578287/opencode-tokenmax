@@ -47,6 +47,9 @@ import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { TokenMaxPolicy } from "@/tokenmax/policy"
+import { TokenMaxRegistry } from "@/tokenmax/registry"
+import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 import { Worktree } from "@/worktree"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
@@ -98,6 +101,7 @@ import { ptyConnectHandlers, ptyHandlers } from "./handlers/pty"
 import { questionHandlers } from "./handlers/question"
 import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
+import { tokenmaxHandlers } from "./handlers/tokenmax"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
 import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -166,6 +170,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     providerHandlers,
     sessionHandlers,
     syncHandlers,
+    tokenmaxHandlers,
     tuiHandlers,
     workspaceHandlers,
   ]),
@@ -266,6 +271,9 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
+  TokenMaxPolicy.node,
+  TokenMaxRegistry.node,
+  TokenMaxTelemetry.node,
 ])
 
 export function createRoutes(

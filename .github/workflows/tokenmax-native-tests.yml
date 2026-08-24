@@ -28,6 +28,11 @@ on:
       - "packages/opencode/test/session/run-state.test.ts"
       - "packages/opencode/src/tokenmax/completion-gate.ts"
       - "packages/opencode/test/tokenmax/completion-gate.test.ts"
+      - "packages/opencode/src/server/routes/instance/httpapi/groups/tokenmax.ts"
+      - "packages/opencode/src/server/routes/instance/httpapi/handlers/tokenmax.ts"
+      - "packages/opencode/src/server/routes/instance/httpapi/api.ts"
+      - "packages/opencode/src/server/routes/instance/httpapi/server.ts"
+      - "packages/opencode/test/server/httpapi-tokenmax.test.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
@@ -68,6 +73,11 @@ jobs:
       - name: Run SessionRunState tests (R2.5 regression 3.6 coverage)
         working-directory: packages/opencode
         run: bun test --timeout 30000 test/session/run-state.test.ts
+        timeout-minutes: 10
+
+      - name: Run TokenMax HTTP API tests (opencode tokenmax's HTTP equivalent)
+        working-directory: packages/opencode
+        run: bun test --timeout 30000 test/server/httpapi-tokenmax.test.ts
         timeout-minutes: 10
 
       - name: Typecheck (packages/opencode)
