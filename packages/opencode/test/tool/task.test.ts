@@ -22,6 +22,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TokenMaxRouter } from "@/tokenmax/router"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
+import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -55,6 +56,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       Ripgrep.node,
       TokenMaxRouter.node,
       TokenMaxPolicy.node,
+      TokenMaxTelemetry.node,
     ]),
     [[RuntimeFlags.node, RuntimeFlags.layer(flags)]],
   )
@@ -615,6 +617,114 @@ describe("tool.task", () => {
       expect(seen?.model?.providerID).toBe(ref.providerID)
       expect(seen?.model?.modelID).toBe(ref.modelID)
     }),
+  )
+
+  it.instance(
+    "execute records TokenMax telemetry for a completed subagent run",
+    () =>
+      Effect.gen(function* () {
+        const telemetry = yield* TokenMaxTelemetry.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ text: "done" }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        const events = yield* telemetry.list()
+        const event = events.find((e) => e.sessionID === result.metadata.sessionId)
+        if (!event) throw new Error("expected a telemetry event for the completed subagent run")
+        expect(event.parentSessionID).toBe(chat.id)
+        expect(event.subagentType).toBe("general")
+        expect(event.outcome).toBe("success")
+        expect(event.modelSource).toBe("router")
+        expect(event.providerID).toBe("cheap")
+        expect(event.modelID).toBe("cheap-model")
+      }),
+    {
+      config: {
+        enabled_providers: ["cheap"],
+        provider: {
+          cheap: {
+            name: "Cheap Co",
+            id: "cheap",
+            env: [],
+            npm: "@ai-sdk/openai-compatible",
+            models: {
+              "cheap-model": {
+                id: "cheap-model",
+                name: "Cheap Model",
+                attachment: false,
+                reasoning: false,
+                temperature: false,
+                tool_call: true,
+                release_date: "2025-01-01",
+                limit: { context: 100_000, output: 10_000 },
+                cost: { input: 0, output: 0 },
+                options: {},
+              },
+            },
+            options: { apiKey: "test-key", baseURL: "http://127.0.0.1:0" },
+          },
+        },
+      },
+      init: (directory) =>
+        Effect.tryPromise(() => Bun.write(`${directory}/tokenmax.json`, JSON.stringify({ router: { enabled: true } }))).pipe(
+          Effect.orDie,
+        ),
+    },
+  )
+
+  it.instance(
+    "execute records a telemetry event with outcome error when the subagent fails",
+    () =>
+      Effect.gen(function* () {
+        const telemetry = yield* TokenMaxTelemetry.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+
+        const exit = yield* def
+          .execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps({ toolError: "boom" }) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        const events = yield* telemetry.list()
+        const event = events.findLast((e) => e.parentSessionID === chat.id)
+        if (!event) throw new Error("expected a telemetry event even though the subagent run failed")
+        expect(event.outcome).toBe("error")
+      }),
   )
 
   it.instance("prevents subagents from launching subagents by default", () =>

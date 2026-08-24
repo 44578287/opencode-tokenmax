@@ -57,6 +57,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
 import { TokenMaxRegistry } from "@/tokenmax/registry"
 import { TokenMaxRouter } from "@/tokenmax/router"
+import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 
 export const AppLayer = AppNodeBuilderV1.build(
   LayerNode.group([
@@ -111,6 +112,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     TokenMaxPolicy.node,
     TokenMaxRegistry.node,
     TokenMaxRouter.node,
+    TokenMaxTelemetry.node,
   ]),
 ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))
 

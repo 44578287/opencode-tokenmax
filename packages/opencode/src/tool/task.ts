@@ -16,6 +16,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { TokenMaxRouter } from "@/tokenmax/router"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
+import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -92,6 +93,7 @@ export const TaskTool = Tool.define(
     const database = yield* Database.Service
     const tokenmaxRouter = yield* TokenMaxRouter.Service
     const tokenmaxPolicy = yield* TokenMaxPolicy.Service
+    const tokenmaxTelemetry = yield* TokenMaxTelemetry.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -184,6 +186,7 @@ export const TaskTool = Tool.define(
 
       const fallbackModel = { modelID: msg.info.modelID, providerID: msg.info.providerID }
       let model = next.model
+      let modelSource: "explicit" | "router" | "inherited" = model ? "explicit" : "inherited"
       if (!model) {
         // Automatic model selection (R2 -- Native Child Routing,
         // docs/TOKENMAX-ROADMAP.md) only activates when the project's
@@ -193,12 +196,13 @@ export const TaskTool = Tool.define(
         // across every channel must never change behavior for someone who
         // didn't ask for it. See docs/TOKENMAX-DECISIONS.md D-010.
         const tokenmaxPolicyInfo = yield* tokenmaxPolicy.get()
-        model =
-          tokenmaxPolicyInfo.router?.enabled === true
-            ? yield* tokenmaxRouter
-                .select({ requireToolCall: true, fallback: fallbackModel })
-                .pipe(Effect.map((selection) => ({ providerID: selection.providerID, modelID: selection.modelID })))
-            : fallbackModel
+        if (tokenmaxPolicyInfo.router?.enabled === true) {
+          const selection = yield* tokenmaxRouter.select({ requireToolCall: true, fallback: fallbackModel })
+          model = { providerID: selection.providerID, modelID: selection.modelID }
+          modelSource = selection.reason.includes("fallback") ? "inherited" : "router"
+        } else {
+          model = fallbackModel
+        }
       }
       const metadata = {
         parentSessionId: ctx.sessionID,
@@ -215,32 +219,53 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
-      const runTask = Effect.fn("TaskTool.runTask")(function* () {
-        const parts = yield* ops.resolvePromptParts(params.prompt)
-        const result = yield* ops.prompt({
-          messageID: MessageID.ascending(),
-          sessionID: nextSession.id,
-          model: {
-            modelID: model.modelID,
+      // Fire-and-forget: never let a telemetry write slow down or fail
+      // subagent dispatch (Telemetry.Service.record already swallows its
+      // own errors internally too -- belt and suspenders).
+      const recordTelemetry = (outcome: TokenMaxTelemetry.Outcome) =>
+        tokenmaxTelemetry
+          .record({
+            sessionID: nextSession.id,
+            parentSessionID: ctx.sessionID,
             providerID: model.providerID,
-          },
-          variant: next.model ? undefined : variant,
-          agent: next.name,
-          parts,
-        })
-        if (result.info.role === "assistant" && result.info.error) {
-          const message =
-            "message" in result.info.error.data && typeof result.info.error.data.message === "string"
-              ? result.info.error.data.message
-              : result.info.error.name
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
-        }
-        const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
-        if (failed?.type === "tool" && failed.state.status === "error") {
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
-        }
-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
-      })
+            modelID: model.modelID,
+            modelSource,
+            subagentType: params.subagent_type,
+            description: params.description,
+            outcome,
+          })
+          .pipe(Effect.ignore)
+
+      const runTask = Effect.fn("TaskTool.runTask")(
+        function* () {
+          const parts = yield* ops.resolvePromptParts(params.prompt)
+          const result = yield* ops.prompt({
+            messageID: MessageID.ascending(),
+            sessionID: nextSession.id,
+            model: {
+              modelID: model.modelID,
+              providerID: model.providerID,
+            },
+            variant: next.model ? undefined : variant,
+            agent: next.name,
+            parts,
+          })
+          if (result.info.role === "assistant" && result.info.error) {
+            const message =
+              "message" in result.info.error.data && typeof result.info.error.data.message === "string"
+                ? result.info.error.data.message
+                : result.info.error.name
+            return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
+          }
+          const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
+          if (failed?.type === "tool" && failed.state.status === "error") {
+            return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
+          }
+          return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        },
+        Effect.tap(() => recordTelemetry("success")),
+        Effect.tapError(() => recordTelemetry("error")),
+      )
 
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
         state: "completed" | "error",

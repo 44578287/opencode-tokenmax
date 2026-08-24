@@ -56,6 +56,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
 import { TokenMaxRouter } from "@/tokenmax/router"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
+import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return (
@@ -453,6 +454,7 @@ export const node = LayerNode.make({
     Ripgrep.node,
     TokenMaxRouter.node,
     TokenMaxPolicy.node,
+    TokenMaxTelemetry.node,
   ],
 })
 

@@ -56,11 +56,9 @@ state, not about using them.
 - Availability engine currently only reports resources `Provider.Service`
   already connected — it does not yet surface the not-yet-connected catalog
   (what a user *could* configure), nor track availability history over time.
-- No persistence beyond the policy file itself (no usage/telemetry storage
-  yet).
 - No HTTP API equivalent of `opencode tokenmax` yet (CLI only).
-- No telemetry (recording which resource was actually used per completed
-  turn) yet.
+- `opencode tokenmax` doesn't yet surface telemetry history (`telemetry.ts`,
+  landed under R2 below) — status output is still registry-only.
 
 ## R2 — Native Child Routing (first slice landed, ahead of R1 completing)
 
@@ -95,6 +93,13 @@ real model selection at the one point it previously had none.
   prompt call received and checks it against the router's selection, not
   just the router's return value in isolation -- and a companion test
   proves behavior is unchanged with routing off.
+- `telemetry.ts` — `TokenMaxTelemetry.Service`: records which resource
+  actually handled each subagent run and its outcome (success/error),
+  reusing `Storage.Service` rather than new persistence. Recording starts
+  now, ahead of any reader, so R3's "historical success weighting" doesn't
+  start from zero history. Wired into `tool/task.ts`'s `runTask` (both
+  success and failure paths record; a storage failure never blocks
+  dispatch). Fully test-covered including the failure path.
 
 **Not yet done**:
 - Context package construction and child-to-root result flow beyond what
