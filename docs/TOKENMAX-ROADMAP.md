@@ -119,6 +119,38 @@ A reference prototype for this phase already exists (see
 to the same reuse criteria as anything else — it is not automatically
 adopted wholesale.
 
+**Finding (narrows this phase's real scope)** — checked the D-001 reuse
+criteria's "is there already an upstream primitive" question against the
+prototype's BUSY invariant enforcement before porting anything, and the
+answer is yes: upstream's `SessionRunState`/`Runner`
+(`src/effect/runner.ts`) already wraps every run with `Effect.onExit(...)`,
+which fires on success, failure, AND interruption alike. There is no code
+path in the current architecture that leaves a session "finished" without
+also transitioning it back to idle — a stronger, structural guarantee than
+the prototype's own approach (reactively detecting "BUSY with zero active
+operations" after the fact and correcting it). See D-011.
+`test/session/run-state.test.ts` is the enforceable regression test for
+this (regression 3.6, "mid-run permanent BUSY" from
+`TOKENMAX-RELIABILITY.md`) against the real mechanism — 3 tests: idle
+after success, idle after a failed run, idle after a shell run cancelled
+mid-flight. All pass against upstream as-is; nothing needed fixing. Also
+found, while writing these tests: `SessionRunState.ensureRunning` (used by
+`SessionPrompt`'s main turn/subagent loop) does not itself call the
+Runner's `onBusy` hook — only `SessionRunState.startShell` (used by
+`SessionPrompt.shell`) does. `ensureRunning`'s Idle case calls `startRun`
+directly; whatever flips status to busy for the main loop happens at a
+higher level than `SessionRunState` itself. Not a bug — just means the
+"busy while running" assertion needed a `startShell`-based test, not an
+`ensureRunning`-based one.
+
+Net effect: the frozen prototype's `busy-invariant.ts`/`operation-manager.ts`
+are **not** being ported — that problem is already solved upstream, more
+strongly than the prototype solved it. This phase's real remaining scope is
+the parts of the prototype that are genuinely new relative to upstream:
+Completion Gate (multi-step DAG completion detection), GitHub CI watcher,
+watchdog, and early-stop detection/recovery — each still subject to the
+same reuse check before porting.
+
 ## R3 — Intelligent Resource Scheduling
 
 Capability learning from real outcomes, historical success weighting,

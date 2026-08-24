@@ -233,3 +233,47 @@ official OpenCode has always had -- verified by a dedicated regression
 test (`test/tool/task.test.ts`: "execute keeps the parent's model when
 TokenMax routing is not enabled by policy") alongside the positive case
 proving the router's selection is what's actually invoked.
+
+### D-011: R2.5's BUSY invariant enforcement is not ported from the frozen prototype -- upstream already has a stronger guarantee
+
+Before starting R2.5, checked the D-001 reuse criteria's "is there already
+an upstream primitive" question against the frozen prototype's
+`busy-invariant.ts`/`operation-manager.ts` (the R2.5 reference prototype
+noted in D-003). Traced `SessionRunState`/`Runner`
+(`src/session/run-state.ts`, `src/effect/runner.ts`) and found every run
+is wrapped in `Effect.onExit(...)`, which fires on success, failure, and
+interruption alike -- there is no code path in the current architecture
+that leaves a session "finished" without also transitioning it back to
+idle. This is stronger than the prototype's own approach, which detects
+"BUSY with zero active operations" reactively, after the fact, and
+corrects it -- the upstream architecture simply cannot reach that state
+in the first place.
+
+Wrote `test/session/run-state.test.ts` as the enforceable regression test
+for regression 3.6 ("mid-run permanent BUSY",
+`TOKENMAX-RELIABILITY.md`) against upstream's real mechanism, not a
+reimplemented invariant checker: idle after a successful run, idle after
+a run that fails (via `Effect.die`, since `ensureRunning`'s work carries
+no typed error channel -- a real failure surfaces as a defect), and idle
+after a shell run is cancelled mid-flight. All three passed against
+upstream as-is on the first working version; nothing needed fixing.
+
+Also found, incidentally, while writing these tests: `ensureRunning`
+(used by `SessionPrompt`'s main turn/subagent loop) does not itself call
+the `Runner`'s `onBusy` hook -- only `startShell` (used by
+`SessionPrompt.shell`) does; `ensureRunning`'s Idle case calls `startRun`
+directly, and whatever flips status to busy for the main loop happens at
+a higher level than `SessionRunState` itself. This is not a bug -- both
+paths still call `onIdle` on completion via the same `Effect.onExit`, so
+the orphan-BUSY guarantee holds either way -- it just meant the "busy
+while running" assertion needed a `startShell`-based test rather than an
+`ensureRunning`-based one, since only `startShell` exercises the
+onBusy -> onIdle cycle end to end.
+
+Decision: the frozen prototype's `busy-invariant.ts`/`operation-manager.ts`
+are not ported, wholesale or otherwise -- porting them would duplicate a
+guarantee upstream already provides more strongly. R2.5's real remaining
+scope narrows to what's genuinely new relative to upstream: Completion
+Gate (multi-step DAG completion detection), GitHub CI watcher, watchdog,
+and early-stop detection/recovery -- each still subject to the same reuse
+check before anything from the prototype is ported.

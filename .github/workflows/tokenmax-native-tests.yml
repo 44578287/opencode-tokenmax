@@ -23,6 +23,9 @@ on:
       - "packages/opencode/test/tool/task.test.ts"
       - "packages/opencode/src/cli/cmd/tokenmax.ts"
       - "packages/opencode/src/effect/app-runtime.ts"
+      - "packages/opencode/src/session/run-state.ts"
+      - "packages/opencode/src/effect/runner.ts"
+      - "packages/opencode/test/session/run-state.test.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
@@ -58,6 +61,11 @@ jobs:
       - name: Run R0 regression pass (prompt loop unaffected by router changes)
         working-directory: packages/opencode
         run: bun test --timeout 30000 test/session/prompt.test.ts -t "R0 regression"
+        timeout-minutes: 10
+
+      - name: Run SessionRunState tests (R2.5 regression 3.6 coverage)
+        working-directory: packages/opencode
+        run: bun test --timeout 30000 test/session/run-state.test.ts
         timeout-minutes: 10
 
       - name: Typecheck (packages/opencode)
