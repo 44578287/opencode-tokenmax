@@ -277,3 +277,33 @@ scope narrows to what's genuinely new relative to upstream: Completion
 Gate (multi-step DAG completion detection), GitHub CI watcher, watchdog,
 and early-stop detection/recovery -- each still subject to the same reuse
 check before anything from the prototype is ported.
+
+### D-012: Completion Gate ported from the frozen prototype (unlike busy-invariant)
+
+Ran the same D-001 reuse check against the prototype's
+`completion-gate.ts` that D-011 ran against `busy-invariant.ts`, and it
+came out the opposite way. `completion-gate.ts` is pure (`evaluateStop`,
+`detectEarlyStop`, `EarlyStopTracker` take/return plain data, no Effect,
+no service dependency), its only external type (`RunTerminalState`) is a
+four-value string union trivial to inline rather than pulling in the
+not-ported `operation-manager.ts`, it is fully test-covered (13 tests),
+and -- unlike BUSY-state tracking -- there genuinely is no existing
+upstream primitive: OpenCode's `SessionPrompt` loop trusts a model's own
+`finish_reason: "stop"` as-is today, with no requirement-based gate
+between that signal and treating a turn as done. Ported it verbatim into
+`packages/opencode/src/tokenmax/completion-gate.ts` with its full test
+suite (`test/tokenmax/completion-gate.test.ts`), only adapting doc
+references (`docs/TOKENMAX-RELIABILITY.md` 3.7 in place of the
+prototype's own "master brief §17/§18" comments) and inlining
+`RunTerminalState` locally instead of importing the prototype's
+`types.ts` (which also declares `OperationState`/`OperationSnapshot` --
+concepts tied to the not-ported Operation Manager, out of scope here).
+
+This is deliberately landed as a pure, tested, standalone slice with no
+wiring into `SessionPrompt`'s actual turn loop yet -- same pattern as
+`router.ts`/`telemetry.ts` in R2, which also shipped their decision logic
+ahead of downstream integration. Constructing real `RunRequirement`s from
+live DAG/worker/verification state, and actually calling
+`evaluateStop()`/`detectEarlyStop()` against a real model turn, is
+tracked as "not yet done" in `TOKENMAX-ROADMAP.md`'s R2.5 section rather
+than silently assumed.

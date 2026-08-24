@@ -151,6 +151,32 @@ Completion Gate (multi-step DAG completion detection), GitHub CI watcher,
 watchdog, and early-stop detection/recovery — each still subject to the
 same reuse check before porting.
 
+**Landed** (`packages/opencode/src/tokenmax/completion-gate.ts`), real and
+test-covered:
+- Ported from the frozen prototype after the reuse check: pure, no
+  dependency on the not-ported `operation-manager.ts`, no existing
+  upstream equivalent (OpenCode's session loop trusts a model's own
+  `finish_reason` as-is today, with no requirement-based gate).
+- `evaluateStop()` — the sole authority for a `TERMINAL` "DONE" outcome,
+  gated only on caller-supplied `RunRequirement`s (dag/operation/worker/
+  verification/objective sources), never on model text. Regression 3.7
+  in `TOKENMAX-RELIABILITY.md`.
+- `detectEarlyStop()` / `EarlyStopTracker` — the separate, secondary
+  heuristic that recognizes a model announcing intent ("I'll now start
+  Agent A...", "接下来我会...") with zero tool calls and no observed
+  progress, and walks a fixed, non-repeating escalation ladder (request
+  tool action -> stronger instruction -> root fallback -> explicit
+  failure). Advisory only — cannot itself fail or complete a run.
+- 13/13 ported tests pass unchanged; 0 typecheck errors, 0 lint warnings.
+
+**Not yet done**:
+- No wiring into `SessionPrompt`'s actual turn loop yet — nothing today
+  constructs real `RunRequirement`s from live DAG/worker/verification
+  state, or calls `evaluateStop()`/`detectEarlyStop()` against a real
+  model turn. This slice is the decision logic in isolation, matching how
+  `router.ts`/`telemetry.ts` landed ahead of their own downstream wiring.
+- GitHub CI watcher and watchdog are not started.
+
 ## R3 — Intelligent Resource Scheduling
 
 Capability learning from real outcomes, historical success weighting,

@@ -26,6 +26,8 @@ on:
       - "packages/opencode/src/session/run-state.ts"
       - "packages/opencode/src/effect/runner.ts"
       - "packages/opencode/test/session/run-state.test.ts"
+      - "packages/opencode/src/tokenmax/completion-gate.ts"
+      - "packages/opencode/test/tokenmax/completion-gate.test.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
