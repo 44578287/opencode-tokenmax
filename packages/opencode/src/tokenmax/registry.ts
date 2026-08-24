@@ -11,28 +11,21 @@ export * as TokenMaxRegistry from "./registry"
 // overrides (policy.ts), and a stable boundary R2's router can depend on
 // without reaching into Provider internals directly.
 //
-// Scope note: list() currently returns only *connected* resources (mirrors
-// Provider.Service.list(), which itself only returns providers it could
-// successfully initialize -- see
-// server/routes/instance/httpapi/handlers/provider.ts for the same
-// connected-vs-catalog distinction against ModelsDev's full provider
-// catalog). Surfacing the full not-yet-connected catalog (so
-// /tokenmax-status can show "available to configure") is real, useful,
-// explicitly out of scope for this slice, and not yet done -- `connected`
-// is kept on Resource now (always true today) so the API shape doesn't
-// need to change when that's added.
-//
-// No automatic dispatch here or anywhere in R1 -- this only reports what
-// exists and its state.
+// Scope note: list() returns *connected* resources by default (mirrors
+// Provider.Service.list()), and additionally the not-yet-connected ModelsDev
+// catalog when `includeCatalog` is set (A1, availability.ts). No automatic
+// dispatch here -- this only reports what exists and its state.
 
 import { mapValues } from "remeda"
 import { Context, Effect, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
 import { TokenMaxPolicy } from "./policy"
 import { TokenMaxBilling } from "./billing"
 import { TokenMaxAvailability } from "./availability"
+import { TokenMaxPayment } from "./payment"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import type { ModelV2 } from "@opencode-ai/core/model"
 
@@ -43,7 +36,10 @@ export interface Resource {
   readonly modelName: string
   readonly capabilities: Provider.Model["capabilities"]
   readonly cost: Provider.Model["cost"]
+  /** Price tier: how expensive per token (free/economy/standard/premium). */
   readonly billingClass: TokenMaxBilling.Class
+  /** Payment model: how it's paid for (subscription_quota vs payg_token vs …). Orthogonal to billingClass. */
+  readonly paymentModel: TokenMaxPayment.Model
   readonly availability: TokenMaxAvailability.State
   readonly connected: boolean
   readonly enabled: boolean
@@ -72,21 +68,35 @@ function billingThresholds(policy: TokenMaxPolicy.Info): TokenMaxBilling.Thresho
   }
 }
 
+function baseURLOf(info: Provider.Info): string | undefined {
+  const raw = info.options?.["baseURL"]
+  return typeof raw === "string" ? raw : undefined
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const policy = yield* TokenMaxPolicy.Service
     const modelsDev = yield* ModelsDev.Service
+    const auth = yield* Auth.Service
 
-    // Map one provider's models into Resources. `connected` drives both the
-    // flag and the availability state (see availability.ts) -- catalog-only
-    // resources are the honest "you could configure this" suggestions, not
-    // usable resources, so their `enabled` is irrelevant and left true.
-    const toResources = (info: Provider.Info, p: TokenMaxPolicy.Info, connected: boolean): Resource[] => {
+    // Map one provider's models into Resources. `connected` drives the flag,
+    // the availability state (availability.ts), and how the payment model is
+    // derived (payment.ts). `authType` is the connected provider's stored
+    // credential type (undefined for catalog-only or credential-less
+    // providers) -- the load-bearing signal separating subscription_quota
+    // from payg_token.
+    const toResources = (
+      info: Provider.Info,
+      p: TokenMaxPolicy.Info,
+      connected: boolean,
+      authType: TokenMaxPayment.ClassifyInput["authType"],
+    ): Resource[] => {
       const thresholds = billingThresholds(p)
       const providerOverride = p.providers?.[info.id]
       const providerEnabled = providerOverride?.enabled ?? true
+      const baseURL = baseURLOf(info)
       return Object.values(info.models).map((model) => {
         const modelEnabled = providerOverride?.models?.[model.id]?.enabled ?? true
         return {
@@ -97,6 +107,7 @@ const layer = Layer.effect(
           capabilities: model.capabilities,
           cost: model.cost,
           billingClass: TokenMaxBilling.classify(model.cost, thresholds),
+          paymentModel: TokenMaxPayment.classify({ cost: model.cost, connected, authType, baseURL }),
           availability: TokenMaxAvailability.fromConnected(connected),
           connected,
           enabled: connected ? providerEnabled && modelEnabled : true,
@@ -107,10 +118,13 @@ const layer = Layer.effect(
     const list = Effect.fn("TokenMaxRegistry.list")(function* (options?: ListOptions) {
       const providers = yield* provider.list()
       const p = yield* policy.get()
+      // A missing/failed auth store must never break the registry -- degrade
+      // to "no known credentials" (paymentModel falls back to unknown).
+      const credentials = yield* auth.all().pipe(Effect.catch(() => Effect.succeed({} as Record<string, Auth.Info>)))
 
       const resources: Resource[] = []
       for (const info of Object.values(providers)) {
-        resources.push(...toResources(info, p, true))
+        resources.push(...toResources(info, p, true, credentials[info.id]?.type))
       }
 
       if (options?.includeCatalog) {
@@ -122,7 +136,7 @@ const layer = Layer.effect(
         const catalog = mapValues(yield* modelsDev.get(), Provider.fromModelsDevProvider)
         for (const [id, info] of Object.entries(catalog)) {
           if (connectedIDs.has(id)) continue
-          resources.push(...toResources(info, p, false))
+          resources.push(...toResources(info, p, false, undefined))
         }
       }
 
@@ -136,5 +150,5 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Provider.node, TokenMaxPolicy.node, ModelsDev.node],
+  deps: [Provider.node, TokenMaxPolicy.node, ModelsDev.node, Auth.node],
 })

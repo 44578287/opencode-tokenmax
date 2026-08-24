@@ -507,3 +507,45 @@ Tested against the real ModelsDev service (the catalog integration test
 asserts invariants -- every catalog entry is `connected: false` +
 `catalog_only`, connected entries are untouched, no provider is both --
 rather than the exact ~5.7k count, which depends on bundled data).
+
+### D-017: payment model is a separate axis from price tier; SUBSCRIPTION_QUOTA != PAYG
+
+R1's `billing.ts` classifies a resource's price TIER (free/economy/
+standard/premium -- "how expensive per token"). The Architecture doc's
+§"Billing classification", though, is about the payment MODEL -- how a
+resource is paid for (FREE/SUBSCRIPTION_QUOTA/PROMOTIONAL_CREDIT/LOCAL/
+PAYG_TOKEN/UNKNOWN). These are genuinely different axes, so A2 ADDS
+`payment.ts` (`paymentModel` on each Resource) rather than replacing the
+price tier. A premium-tier model reached through a Claude subscription and
+the same model reached through a raw PAYG API key sit in the same price
+tier but very different payment models.
+
+Why this matters (and why the doc calls getting it wrong out explicitly):
+a subscription is already paid for. Using it burns quota (an opportunity
+cost) but adds no NEW cash cost, whereas PAYG adds real cash per call. A
+router that treats subscription-quota per-token figures as if they were
+fresh cash will needlessly avoid resources the user already paid for. This
+slice only CLASSIFIES; R3's utility routing (B5) is what will actually
+treat subscription-quota cash cost as ~0.
+
+The honest signal for the split is the provider's stored auth credential
+type (`Auth.Service`): `oauth` == a subscription-style login ==
+`subscription_quota`; `api`/`wellknown` == a per-token key == `payg_token`.
+A local endpoint (loopback/0.0.0.0 host) is `local` regardless of nominal
+cost -- and local is checked BEFORE free, since a $0 model on localhost is
+a local model (Ollama etc. report $0 AND run locally), which is the more
+useful classification. `promotional_credit` is never emitted: there is no
+reliable signal for it (some providers grant free credits with no marker),
+so inventing it would be dishonest -- such resources fall through to
+`payg_token`/`unknown` until a real signal exists.
+
+`payment.ts` is pure and exhaustively unit-tested (including a test
+asserting no input combination ever produces `promotional_credit`). The
+registry gathers the auth type from `Auth.Service` (degrading to "no known
+credentials" -> `unknown` if the auth store is missing/unreadable, so a
+credential-store hiccup never breaks the registry) and the baseURL from
+the provider's options. Note the registry test doubles all use a
+`127.0.0.1` baseURL, so they classify `local` -- the registry integration
+test asserts exactly that (endpoint-derived path), while payment.test.ts
+covers the remote/auth-type paths with explicit inputs, since seeding the
+process-wide auth store from an isolated test isn't practical.

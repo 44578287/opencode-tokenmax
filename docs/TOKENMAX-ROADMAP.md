@@ -52,9 +52,20 @@ state, not about using them.
   `Provider.Service` (deliberately not a reimplementation of provider/model
   discovery — see `TOKENMAX-DECISIONS.md`'s reuse criteria). Capability
   metadata and raw cost come straight from `Provider.Model`.
-- `billing.ts` — billing CLASS categorization (free/economy/standard/premium)
+- `billing.ts` — price-TIER categorization (free/economy/standard/premium)
   computed from `Provider.Model`'s existing cost data, thresholds
   overridable via policy.
+- `payment.ts` — payment-MODEL classification
+  (`free`/`subscription_quota`/`promotional_credit`/`local`/`payg_token`/`unknown`),
+  a distinct axis from the price tier (Architecture §"Billing
+  classification"). The load-bearing distinction: `subscription_quota` (an
+  oauth-authenticated subscription, already paid for — quota burn, no new
+  cash) vs `payg_token` (a raw API key, real cash per call). Derived from
+  cost + connection state + the provider's stored auth credential type
+  (from `Auth.Service`) + a local-endpoint check. `promotional_credit` is
+  never emitted (no reliable signal yet — documented, not faked). Surfaced
+  on the CLI (a `(subscription)`/`(pay-as-you-go)`/… suffix) and the HTTP
+  status resource.
 - `policy.ts` — `TokenMaxPolicy.Service`: TokenMax's own `tokenmax.json[c]`
   file (not an extension of OpenCode's own config schema — same isolation
   principle as R0's D-005), reusing `ConfigPaths`' existing project/global

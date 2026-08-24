@@ -158,6 +158,29 @@ it.instance(
 )
 
 it.instance(
+  "list() derives paymentModel from the endpoint -- a 127.0.0.1 provider is local (auth-type/remote paths in payment.test.ts)",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* TokenMaxRegistry.Service
+      const resources = yield* registry.list()
+      const free = resources.find((r) => r.providerID === "free" && r.modelID === "free-model")
+      const premium = resources.find((r) => r.providerID === "premium" && r.modelID === "premium-model")
+      if (!free || !premium) throw new Error("expected both test-double models in the registry")
+      // Both test doubles use a 127.0.0.1 baseURL, so both classify 'local'
+      // regardless of per-token cost (a local endpoint is local even at $0)
+      // -- this proves the endpoint-derived path flows through the registry.
+      // The doubles have no auth-store credentials and no remote endpoint, so
+      // free / subscription_quota / payg_token / unknown can't be exercised
+      // here; payment.test.ts covers all of those with explicit inputs.
+      if (free.paymentModel !== "local")
+        throw new Error(`expected free-model (127.0.0.1 endpoint) paymentModel 'local', got '${free.paymentModel}'`)
+      if (premium.paymentModel !== "local")
+        throw new Error(`expected premium-model (127.0.0.1 endpoint) paymentModel 'local', got '${premium.paymentModel}'`)
+    }),
+  { config: registryConfig },
+)
+
+it.instance(
   "list() marks every connected resource provider_listed and connected, by default no catalog entries",
   () =>
     Effect.gen(function* () {

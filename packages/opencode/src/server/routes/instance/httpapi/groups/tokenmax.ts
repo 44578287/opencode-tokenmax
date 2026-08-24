@@ -23,6 +23,14 @@ const Resource = Schema.Struct({
   capabilities: Provider.Model.fields.capabilities,
   cost: Provider.Model.fields.cost,
   billingClass: Schema.Literals(["free", "economy", "standard", "premium"]),
+  paymentModel: Schema.Literals([
+    "free",
+    "subscription_quota",
+    "promotional_credit",
+    "local",
+    "payg_token",
+    "unknown",
+  ]),
   availability: Schema.Literals([
     "catalog_only",
     "provider_listed",

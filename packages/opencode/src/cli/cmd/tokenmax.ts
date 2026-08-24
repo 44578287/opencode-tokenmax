@@ -28,6 +28,17 @@ const sourceLabel: Record<string, string> = {
   inherited: "inherited from parent",
 }
 
+// Payment model (how it's paid for) is orthogonal to the price tier
+// (billingClass). Only show a label when it's actually informative --
+// "unknown" adds noise, so it's omitted.
+const paymentLabel: Record<string, string> = {
+  subscription_quota: "subscription",
+  payg_token: "pay-as-you-go",
+  promotional_credit: "promo credit",
+  local: "local",
+  free: "free",
+}
+
 function timeAgo(ms: number) {
   const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000))
   if (seconds < 60) return `${seconds}s ago`
@@ -100,7 +111,11 @@ export const TokenMaxCommand = effectCmd({
           : model.enabled
             ? UI.Style.TEXT_SUCCESS + "enabled" + UI.Style.TEXT_NORMAL
             : UI.Style.TEXT_DANGER + "disabled (policy)" + UI.Style.TEXT_NORMAL
-        process.stdout.write(`  ${model.modelID}  ${color}${model.billingClass}${UI.Style.TEXT_NORMAL}  ${state}` + EOL)
+        const pay = paymentLabel[model.paymentModel]
+        const paySuffix = pay ? `  ${UI.Style.TEXT_DIM}(${pay})${UI.Style.TEXT_NORMAL}` : ""
+        process.stdout.write(
+          `  ${model.modelID}  ${color}${model.billingClass}${UI.Style.TEXT_NORMAL}  ${state}${paySuffix}` + EOL,
+        )
       }
     }
 
