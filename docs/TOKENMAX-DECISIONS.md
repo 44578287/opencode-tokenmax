@@ -360,3 +360,62 @@ Electron runtime needed), runs on every relevant push, and does not
 replace the Windows E2E gate (still the authoritative real-install
 verification) but catches a regression in the isolation *logic* far
 earlier and far cheaper than a full Windows E2E run would.
+
+### D-014: GitHub CI watcher and watchdog adapted, not ported -- Effect-native over hand-rolled, decoupled from the not-ported OperationManager
+
+Continuing R2.5's remaining scope after D-011/D-012 (GitHub CI watcher,
+watchdog). Ran the D-001 reuse check against the prototype's
+`poll-watcher.ts` and `watchdog.ts`, and both needed real adaptation
+rather than a verbatim port -- unlike `completion-gate.ts` (D-012), which
+ported cleanly as-is.
+
+**poll-watcher.ts**: the prototype's `watchUntilDone()` is a hand-rolled
+Promise class with its own `Clock` abstraction and manual `AbortSignal`
+wiring for cancellation. This codebase is Effect-native throughout, and
+Effect's structured concurrency already gives interruption for free --
+interrupting the fiber running `watchUntilDone` interrupts an in-flight
+`Effect.sleep` automatically, with no signal plumbing needed. Reused the
+*behavior* (bounded exponential-then-flat backoff: 2s/4s/8s/15s/30s then
+holds, resolves the instant the poll reports done, times out past
+`maxTotalMs`) as a plain Effect-returning function, not the class it
+shipped in -- "does it match current native architecture" (D-001) said
+no to the class shape, yes to the algorithm. This is the primitive
+regression 3.8 (`TOKENMAX-RELIABILITY.md`, "busy-wait / sleep-based
+waiting") requires: the model never participates in a sleep-then-check
+loop, runtime code owns one bounded poll and hands back a single Effect
+to await. Test-covered with real (tiny) `Effect.sleep` delays via
+`it.live`, not `it.effect`'s `TestClock` -- `TestClock` needs explicit
+time advancement to resolve a suspended sleep, which would need careful
+fiber-interleaving control for no real benefit here, since the actual
+default backoff values are already plainly visible as `DEFAULT_INTERVALS`
+in the source; what the tests need to prove (attempt sequencing,
+resolving the instant `done` is reported, timing out, interrupting
+cleanly) doesn't need the literal schedule numbers to be slow-and-exact.
+
+**watchdog.ts**: the prototype's `Watchdog` class wraps
+`OperationManager.listActive()` directly -- but D-011 already decided
+`OperationManager` isn't being ported (upstream's `SessionRunState`/
+`Runner` already structurally prevents the specific failure it mainly
+existed to catch, orphan BUSY). Porting `Watchdog` verbatim would have
+meant porting `OperationManager` too, just to have something for it to
+wrap. What's actually reusable is the stall-detection computation itself:
+given a list of "active thing with a last-activity timestamp", find
+what's gone stalled past a threshold. Extracted that as `sweep()` --
+pure, generic over any `{ id, lastActivityAt }`-shaped snapshot, no
+dependency on any specific active-thing registry. Same "port the decision
+logic, not the class hierarchy" treatment `completion-gate.ts` got.
+
+Both land as pure/Effect-native primitives only, same pattern as
+`completion-gate.ts`: no live wiring yet, tracked honestly in
+`TOKENMAX-ROADMAP.md`'s R2.5 section. `poll-watcher.ts` has no real
+Octokit-calling GitHub CI watcher built on it yet -- no GitHub credential
+source is plumbed into this app for polling GitHub's API from an ordinary
+session (the existing `@octokit/rest` usage in `cli/cmd/github.handler.ts`
+is the opposite direction: OpenCode running *as* a GitHub Action
+responding to webhook events). `watchdog.ts`'s `sweep()` has no live
+source to sweep -- no active-run registry in this codebase currently
+tracks a per-run last-activity timestamp for in-flight subagent runs.
+Building real credential plumbing or a new activity-tracking registry
+speculatively, without a concrete caller that needs them yet, would be
+scope creep beyond what R2.5 asked for; both are named explicitly as
+"not yet done" rather than silently assumed complete.

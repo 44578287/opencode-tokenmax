@@ -190,13 +190,39 @@ test-covered:
   failure). Advisory only — cannot itself fail or complete a run.
 - 13/13 ported tests pass unchanged; 0 typecheck errors, 0 lint warnings.
 
+**Also landed** (`poll-watcher.ts`, `watchdog.ts`), real and test-covered:
+- `poll-watcher.ts` — `watchUntilDone()`, the bounded backoff-poll
+  primitive regression 3.8 requires (event-driven waiting, never a
+  model-driven "sleep, then check" loop). Reimplemented from the
+  prototype's own `poll-watcher.ts` as an Effect-native function rather
+  than porting its hand-rolled Promise+Clock class — Effect's structured
+  concurrency already gives interruption for free (interrupting the
+  fiber interrupts an in-flight `Effect.sleep` automatically), so no
+  AbortSignal plumbing was needed. This is the primitive a GitHub CI
+  watcher would poll a workflow run's status with.
+- `watchdog.ts` — `sweep()`, adapted (not ported) from the prototype's
+  `Watchdog` class: decoupled from `OperationManager` (not ported per
+  D-011) into a pure function generic over any `{ id, lastActivityAt }`
+  snapshot. Finds everything stalled past a threshold, as of a given
+  `now`.
+- 10/10 new tests pass (4 poll-watcher, 6 watchdog); 0 typecheck errors,
+  0 lint warnings.
+
 **Not yet done**:
 - No wiring into `SessionPrompt`'s actual turn loop yet — nothing today
   constructs real `RunRequirement`s from live DAG/worker/verification
   state, or calls `evaluateStop()`/`detectEarlyStop()` against a real
   model turn. This slice is the decision logic in isolation, matching how
   `router.ts`/`telemetry.ts` landed ahead of their own downstream wiring.
-- GitHub CI watcher and watchdog are not started.
+- GitHub CI watcher's actual Octokit wiring: no GitHub credential source
+  is plumbed into this app for "poll a workflow run from an ordinary
+  session" — the existing octokit usage in `cli/cmd/github.handler.ts` is
+  the opposite direction (OpenCode running *as* a GitHub Action
+  responding to webhook events, not polling GitHub's API itself). The
+  polling primitive it needs (`poll-watcher.ts`) is built; the
+  GitHub-specific caller is not.
+- Watchdog's live source: no active-run registry with per-run
+  last-activity timestamps exists yet for `sweep()` to run against.
 
 ## R3 — Intelligent Resource Scheduling
 
