@@ -139,6 +139,59 @@ function makeReliabilityConfig(flakyProviderID: string, flakyModelID: string) {
   }
 }
 
+// A3 -- requireTemperature capability filter. cheap-notemp is cheapest but
+// doesn't support temperature; pricier-temp does. A requireTemperature
+// selection must pass over the cheaper one.
+const temperatureConfig = {
+  formatter: false,
+  lsp: false,
+  enabled_providers: ["cheap-notemp", "pricier-temp"],
+  provider: {
+    "cheap-notemp": {
+      name: "Cheap No-Temp Co",
+      id: "cheap-notemp",
+      env: [],
+      npm: "@ai-sdk/openai-compatible",
+      models: {
+        "notemp-model": {
+          id: "notemp-model",
+          name: "No-Temp Model",
+          attachment: false,
+          reasoning: false,
+          temperature: false,
+          tool_call: true,
+          release_date: "2025-01-01",
+          limit: { context: 100_000, output: 10_000 },
+          cost: { input: 0, output: 0 },
+          options: {},
+        },
+      },
+      options: { apiKey: "test-key", baseURL: "http://127.0.0.1:0" },
+    },
+    "pricier-temp": {
+      name: "Pricier Temp Co",
+      id: "pricier-temp",
+      env: [],
+      npm: "@ai-sdk/openai-compatible",
+      models: {
+        "temp-model": {
+          id: "temp-model",
+          name: "Temp Model",
+          attachment: false,
+          reasoning: false,
+          temperature: true,
+          tool_call: true,
+          release_date: "2025-01-01",
+          limit: { context: 100_000, output: 10_000 },
+          cost: { input: 0.00001, output: 0.00001 },
+          options: {},
+        },
+      },
+      options: { apiKey: "test-key", baseURL: "http://127.0.0.1:0" },
+    },
+  },
+}
+
 const it = testEffect(
   LayerNode.compile(LayerNode.group([TokenMaxRouter.node, TokenMaxTelemetry.node, Provider.node, Env.node, Plugin.node])),
 )
@@ -156,6 +209,23 @@ it.instance(
         throw new Error(`expected free/free-model, got ${selection.providerID}/${selection.modelID}`)
     }),
   { config: routerConfig },
+)
+
+it.instance(
+  "select({ requireTemperature }) passes over a cheaper model that doesn't support temperature (A3)",
+  () =>
+    Effect.gen(function* () {
+      const router = yield* TokenMaxRouter.Service
+      // Without the requirement, the $0 no-temp model wins on cost.
+      const cheapest = yield* router.select({ requireToolCall: true, fallback })
+      if (cheapest.modelID !== "notemp-model")
+        throw new Error(`expected the cheaper no-temp model without the requirement, got ${cheapest.modelID}`)
+      // With requireTemperature, only the pricier temperature-capable model qualifies.
+      const withTemp = yield* router.select({ requireToolCall: true, requireTemperature: true, fallback })
+      if (withTemp.providerID !== "pricier-temp" || withTemp.modelID !== "temp-model")
+        throw new Error(`expected the temperature-capable model, got ${withTemp.providerID}/${withTemp.modelID}`)
+    }),
+  { config: temperatureConfig },
 )
 
 it.instance(

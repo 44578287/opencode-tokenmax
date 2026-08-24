@@ -145,15 +145,32 @@ real model selection at the one point it previously had none.
   start from zero history. Wired into `tool/task.ts`'s `runTask` (both
   success and failure paths record; a storage failure never blocks
   dispatch). Fully test-covered including the failure path.
+- `requirements.ts` — `derive()`: the subagent's real capability
+  requirements, from what the specific agent declares, replacing the
+  single hardcoded `requireToolCall: true` `task.ts` used for every
+  subagent. A tool-less agent (all core tools denied by its permission
+  ruleset) no longer requires a tool-capable model, so it can use a
+  cheaper non-tool model; an agent that pins a `temperature` now requires
+  a temperature-capable model (new `requireTemperature` on the router's
+  `SelectInput` + candidate filter). Wired into `task.ts` via a pure
+  `Permission.disabled` check against a representative core toolset (no
+  `ToolRegistry` dependency — `TaskTool` is bundled BY `ToolRegistry`, so
+  it can't depend back on it). Still gated on `router.enabled`.
 
 **Not yet done**:
 - Context package construction and child-to-root result flow beyond what
   `tool/task.ts` already did upstream.
 - OmO-compatibility verification (no OmO integration exists yet to test
   against).
-- Per-agent capability requirements are currently a single hardcoded
-  `requireToolCall: true` for every subagent, not derived from what the
-  specific agent actually declares it needs.
+- `requireReasoning` is not derived from the agent yet: the only
+  agent-level signal is `variant`, whose "is this a reasoning variant"
+  meaning is per-model (circular) and easy to get wrong in a way that
+  needlessly excludes good models. Left un-required until a reliable
+  signal exists.
+- The tool-enabled check uses a representative core toolset, not the
+  authoritative full tool list (which would need `ToolRegistry`, circular
+  against `TaskTool`); a custom agent that denies all core tools but
+  enables only an MCP tool would be seen as tool-less.
 
 ## R2.5 — Reliability + Event Runtime
 

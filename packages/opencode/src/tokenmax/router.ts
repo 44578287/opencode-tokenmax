@@ -42,6 +42,7 @@ export interface ModelRef {
 export interface SelectInput {
   readonly requireToolCall?: boolean
   readonly requireReasoning?: boolean
+  readonly requireTemperature?: boolean
   readonly fallback: ModelRef
 }
 
@@ -75,6 +76,7 @@ const layer = Layer.effect(
         if (!r.connected || !r.enabled) return false
         if (input.requireToolCall && !r.capabilities.toolcall) return false
         if (input.requireReasoning && !r.capabilities.reasoning) return false
+        if (input.requireTemperature && !r.capabilities.temperature) return false
         return true
       })
 

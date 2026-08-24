@@ -549,3 +549,47 @@ the provider's options. Note the registry test doubles all use a
 test asserts exactly that (endpoint-derived path), while payment.test.ts
 covers the remote/auth-type paths with explicit inputs, since seeding the
 process-wide auth store from an isolated test isn't practical.
+
+### D-018: per-agent capability requirements derived from the agent, with honest limits
+
+R2 wired the router into task.ts with a single hardcoded
+`requireToolCall: true` for every subagent. A3 replaces that with
+`requirements.ts`'s `derive()`, computing requirements from what the
+specific agent actually declares. Two dimensions are derived; a third is
+deliberately not.
+
+**Derived: requireToolCall.** A tool-less agent (one whose permission
+ruleset denies every tool -- a pure summarizer, say) should not be forced
+onto a tool-capable model, which needlessly excludes cheaper non-tool
+models. task.ts computes "has any tool enabled" via `Permission.disabled`
+(a pure leaf function) against a representative core toolset
+(`bash`/`edit`/`write`/`read`/`grep`/`glob`). It deliberately does NOT use
+the authoritative full tool list from `ToolRegistry`: `TaskTool` is
+bundled BY `ToolRegistry.node`, so having `TaskTool` require
+`ToolRegistry.Service` would make that node depend on itself. The
+representative-toolset check is a conservative proxy -- documented as such
+in TOKENMAX-ROADMAP.md (a custom agent denying all core tools but enabling
+only an MCP tool would be misread as tool-less).
+
+**Derived: requireTemperature.** If an agent pins a `temperature`, the
+model must support temperature. Added as a new optional field on the
+router's `SelectInput` and its candidate filter. Cheap to derive
+(`agent.temperature !== undefined`), correct, and low-risk (temperature is
+widely supported, so it rarely over-constrains).
+
+**Not derived: requireReasoning.** The only agent-level signal is
+`variant`, and whether a given variant name is a "reasoning variant" is a
+per-model fact (the provider computes reasoning variants per model) --
+circular against the very selection we're feeding, and easy to get wrong
+in a way that needlessly excludes perfectly good non-reasoning models. A
+wrong `requireReasoning: true` is strictly worse than leaving it
+un-required, so it stays un-required until a reliable, non-circular signal
+exists. The `Requirements` shape has no `requireReasoning` field at all,
+so this derivation structurally cannot over-constrain on reasoning (a test
+asserts that).
+
+`requirements.ts` is pure and takes already-resolved facts (hasEnabledTools,
+temperature), not the agent object or the registry -- so it never needs a
+model to decide requirements, which matters because these requirements are
+the INPUT to model selection. Still gated on `router.enabled`; behavior
+for anyone who hasn't opted in is unchanged (D-010).

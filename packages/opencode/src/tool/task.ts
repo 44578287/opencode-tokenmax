@@ -17,6 +17,8 @@ import { Database } from "@opencode-ai/core/database/database"
 import { TokenMaxRouter } from "@/tokenmax/router"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
 import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
+import { TokenMaxRequirements } from "@/tokenmax/requirements"
+import { Permission } from "@/permission"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -197,7 +199,19 @@ export const TaskTool = Tool.define(
         // didn't ask for it. See docs/TOKENMAX-DECISIONS.md D-010.
         const tokenmaxPolicyInfo = yield* tokenmaxPolicy.get()
         if (tokenmaxPolicyInfo.router?.enabled === true) {
-          const selection = yield* tokenmaxRouter.select({ requireToolCall: true, fallback: fallbackModel })
+          // A3: derive the subagent's real capability requirements from the
+          // specific agent, instead of hardcoding requireToolCall for every
+          // one. hasEnabledTools uses the agent's own permission ruleset
+          // against a representative core toolset (a pure Permission check,
+          // no ToolRegistry dependency -- TaskTool is bundled BY
+          // ToolRegistry, so it can't depend back on it). A tool-less agent
+          // (all core tools denied) can now use a cheaper non-tool model;
+          // an agent that pins a temperature won't be routed to a model
+          // that doesn't support one. See requirements.ts.
+          const coreTools = ["bash", "edit", "write", "read", "grep", "glob"]
+          const hasEnabledTools = Permission.disabled(coreTools, next.permission).size < coreTools.length
+          const requirements = TokenMaxRequirements.derive({ hasEnabledTools, temperature: next.temperature })
+          const selection = yield* tokenmaxRouter.select({ ...requirements, fallback: fallbackModel })
           model = { providerID: selection.providerID, modelID: selection.modelID }
           modelSource = selection.reason.includes("fallback") ? "inherited" : "router"
         } else {
