@@ -224,12 +224,42 @@ test-covered:
 - Watchdog's live source: no active-run registry with per-run
   last-activity timestamps exists yet for `sweep()` to run against.
 
-## R3 — Intelligent Resource Scheduling
+## R3 — Intelligent Resource Scheduling (first slice landed)
 
 Capability learning from real outcomes, historical success weighting,
 temporary quota weight, safe per-provider concurrency learning,
 exploration/exploitation for new resources, specialist classification,
 Resource HUD in the Desktop UI.
+
+**Landed** (`packages/opencode/src/tokenmax/reliability.ts`, wired into
+`router.ts`), real and test-covered:
+- `reliability.ts` — `score()`/`isUnreliable()`: pure, rule-based (not a
+  learned model) historical success weighting from `TokenMaxTelemetry`'s
+  recorded outcomes. A resource with no history scores as fully trusted
+  (cold start — a new or rarely-used resource must stay selectable, or it
+  could never accumulate the history needed to prove itself). A single
+  bad run is never enough signal (`minSampleSize` default 3); below that,
+  even a 100% failure rate doesn't count against a resource yet.
+- Wired into `router.ts`'s `select()`: candidates with enough recent
+  history AND a poor success rate (`minSuccessRate` default 0.5) are
+  excluded before the existing cost-based sort runs — but never if
+  exclusion would remove every candidate; an unreliable resource still
+  strictly beats no dispatch at all, same "always returns a usable
+  selection" guarantee R2's router already had. `Selection.reason` notes
+  how many resources were excluded, for observability.
+- 9/9 new `reliability.ts` tests, 3/3 new router integration tests (a
+  flaky-but-cheap resource loses to a pricier reliable one once it has
+  enough failures; a single failure doesn't exclude anything; reliability
+  filtering never empties the candidate pool). 0 typecheck errors, 0 lint
+  warnings; all pre-existing router/task tests unaffected.
+
+**Not yet done**:
+- No recency weighting — `select()` currently scores a resource against
+  its *entire* recorded history, not a recent window, so an old bad
+  patch a resource has since recovered from still counts today.
+- Temporary quota weight, safe per-provider concurrency learning,
+  exploration/exploitation for new resources, specialist classification,
+  and the Desktop UI's Resource HUD are all still unstarted.
 
 ## R4 — Long Task Runtime
 

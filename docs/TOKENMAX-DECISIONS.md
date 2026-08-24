@@ -419,3 +419,55 @@ Building real credential plumbing or a new activity-tracking registry
 speculatively, without a concrete caller that needs them yet, would be
 scope creep beyond what R2.5 asked for; both are named explicitly as
 "not yet done" rather than silently assumed complete.
+
+### D-015: R3's first slice -- historical success weighting in the router
+
+R2's `router.ts` named this out of scope for itself on purpose ("building
+that here would be getting ahead of the roadmap's own ordering") and R2's
+`telemetry.ts` started recording outcomes specifically so this phase
+wouldn't start from zero history. With R2.5's primitives landed (D-011
+through D-014), moved on to R3 -- "Intelligent Resource Scheduling" --
+using that history.
+
+Added `reliability.ts`: `score()` computes a success rate from a
+resource's recorded `TokenMaxTelemetry` outcomes; `isUnreliable()` flags
+it only once it has enough samples to be a real signal. Two design
+choices, both deliberate:
+
+- **Cold start = full trust.** A resource with zero recorded history
+  scores exactly as trustworthy as one with a perfect record. The
+  alternative (treating "no data" as suspicious) would make a
+  newly-connected or rarely-used resource permanently unable to prove
+  itself, since it can only accumulate history by actually being
+  selected.
+- **A minimum sample size gates the penalty, not just the rate.** One
+  failed run must never tank a resource's eligibility -- `minSampleSize`
+  defaults to 3, so even a resource with a 100% failure rate stays fully
+  eligible until it has that much history. This mirrors the same
+  "don't overreact to a single bad signal" principle
+  `completion-gate.ts`'s `EarlyStopTracker` already applies to early-stop
+  detection (D-012), just for a different signal.
+
+Wired into `router.ts`'s `select()` as an exclusion filter that runs
+*before* the existing cost-based sort, with one hard guarantee carried
+over from R2: reliability filtering is never applied if it would remove
+every remaining candidate. An unreliable resource is still strictly
+better than failing subagent dispatch outright -- same reasoning as R2's
+"always returns a usable selection, never a 'no resource' error."
+
+Testing this needed a new precaution beyond what R2's router tests
+already knew: `TokenMaxTelemetry`'s storage is process-wide (already
+known, see `telemetry.ts`'s and `telemetry.test.ts`'s own comments), but
+it also accumulates *per resource key* (`providerID`/`modelID`), not per
+session ID -- a unique session ID prefix per test is not enough on its
+own if two tests both record telemetry against the same provider/model,
+since those records add up rather than overwrite. Discovered this the
+concrete way: a new "single failure doesn't exclude anything" test failed
+because an earlier test in the same file had already recorded 3 failures
+against the same `providerID`/`modelID` pair, and process-wide storage
+carried that history into the later test. Fixed by giving each new
+reliability test in `router.test.ts` its own entirely distinct
+provider/model pair (via a `makeReliabilityConfig()` helper), so no two
+tests' recorded histories can ever mix -- the same isolation discipline
+`enabled_providers` allowlisting already applied to ambient
+credential leakage (R2), now applied to cross-test telemetry leakage too.

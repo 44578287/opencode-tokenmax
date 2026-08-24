@@ -43,6 +43,10 @@ on:
       - "packages/opencode/test/tokenmax/poll-watcher.test.ts"
       - "packages/opencode/src/tokenmax/watchdog.ts"
       - "packages/opencode/test/tokenmax/watchdog.test.ts"
+      - "packages/opencode/src/tokenmax/reliability.ts"
+      - "packages/opencode/test/tokenmax/reliability.test.ts"
+      - "packages/opencode/src/tokenmax/router.ts"
+      - "packages/opencode/test/tokenmax/router.test.ts"
 
 concurrency:
   group: tokenmax-native-tests-${{ github.ref }}
