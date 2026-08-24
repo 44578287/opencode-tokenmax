@@ -25,11 +25,14 @@ export * as TokenMaxRegistry from "./registry"
 // No automatic dispatch here or anywhere in R1 -- this only reports what
 // exists and its state.
 
+import { mapValues } from "remeda"
 import { Context, Effect, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { TokenMaxPolicy } from "./policy"
 import { TokenMaxBilling } from "./billing"
+import { TokenMaxAvailability } from "./availability"
 import type { ProviderV2 } from "@opencode-ai/core/provider"
 import type { ModelV2 } from "@opencode-ai/core/model"
 
@@ -41,12 +44,23 @@ export interface Resource {
   readonly capabilities: Provider.Model["capabilities"]
   readonly cost: Provider.Model["cost"]
   readonly billingClass: TokenMaxBilling.Class
+  readonly availability: TokenMaxAvailability.State
   readonly connected: boolean
   readonly enabled: boolean
 }
 
+export interface ListOptions {
+  /**
+   * Also include resources known to the ModelsDev catalog but not currently
+   * connected (availability=catalog_only, connected=false) -- i.e. what a
+   * user *could* configure. Default false, so the router/CLI/HTTP paths
+   * that only care about usable resources stay byte-identical to R1.
+   */
+  readonly includeCatalog?: boolean
+}
+
 export interface Interface {
-  readonly list: () => Effect.Effect<Resource[]>
+  readonly list: (options?: ListOptions) => Effect.Effect<Resource[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@tokenmax/ResourceRegistry") {}
@@ -63,31 +77,55 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const policy = yield* TokenMaxPolicy.Service
+    const modelsDev = yield* ModelsDev.Service
 
-    const list = Effect.fn("TokenMaxRegistry.list")(function* () {
+    // Map one provider's models into Resources. `connected` drives both the
+    // flag and the availability state (see availability.ts) -- catalog-only
+    // resources are the honest "you could configure this" suggestions, not
+    // usable resources, so their `enabled` is irrelevant and left true.
+    const toResources = (info: Provider.Info, p: TokenMaxPolicy.Info, connected: boolean): Resource[] => {
+      const thresholds = billingThresholds(p)
+      const providerOverride = p.providers?.[info.id]
+      const providerEnabled = providerOverride?.enabled ?? true
+      return Object.values(info.models).map((model) => {
+        const modelEnabled = providerOverride?.models?.[model.id]?.enabled ?? true
+        return {
+          providerID: model.providerID,
+          modelID: model.id,
+          providerName: info.name,
+          modelName: model.name,
+          capabilities: model.capabilities,
+          cost: model.cost,
+          billingClass: TokenMaxBilling.classify(model.cost, thresholds),
+          availability: TokenMaxAvailability.fromConnected(connected),
+          connected,
+          enabled: connected ? providerEnabled && modelEnabled : true,
+        }
+      })
+    }
+
+    const list = Effect.fn("TokenMaxRegistry.list")(function* (options?: ListOptions) {
       const providers = yield* provider.list()
       const p = yield* policy.get()
-      const thresholds = billingThresholds(p)
 
       const resources: Resource[] = []
       for (const info of Object.values(providers)) {
-        const providerOverride = p.providers?.[info.id]
-        const providerEnabled = providerOverride?.enabled ?? true
-        for (const model of Object.values(info.models)) {
-          const modelEnabled = providerOverride?.models?.[model.id]?.enabled ?? true
-          resources.push({
-            providerID: model.providerID,
-            modelID: model.id,
-            providerName: info.name,
-            modelName: model.name,
-            capabilities: model.capabilities,
-            cost: model.cost,
-            billingClass: TokenMaxBilling.classify(model.cost, thresholds),
-            connected: true,
-            enabled: providerEnabled && modelEnabled,
-          })
+        resources.push(...toResources(info, p, true))
+      }
+
+      if (options?.includeCatalog) {
+        // The full ModelsDev universe, mapped through the same
+        // Provider.fromModelsDevProvider the provider service itself uses
+        // (no parallel mapping). Skip providers already connected above --
+        // a connected provider is never also catalog-only.
+        const connectedIDs = new Set(Object.keys(providers))
+        const catalog = mapValues(yield* modelsDev.get(), Provider.fromModelsDevProvider)
+        for (const [id, info] of Object.entries(catalog)) {
+          if (connectedIDs.has(id)) continue
+          resources.push(...toResources(info, p, false))
         }
       }
+
       return resources
     })
 
@@ -95,4 +133,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer, deps: [Provider.node, TokenMaxPolicy.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [Provider.node, TokenMaxPolicy.node, ModelsDev.node],
+})

@@ -76,10 +76,23 @@ state, not about using them.
   server app (`test/server/httpapi-tokenmax.test.ts`), not just the
   handler function in isolation.
 
+- `availability.ts` + registry catalog (`registry.list({ includeCatalog })`)
+  — availability is now a distinct per-resource state
+  (`catalog_only`/`provider_listed`/… — Architecture §"Availability,
+  separate from capability"), and the registry can surface the full
+  not-yet-connected ModelsDev catalog (what a user *could* configure) as
+  `catalog_only`, mapped through the same `Provider.fromModelsDevProvider`
+  the provider service itself uses. Reachable from both surfaces:
+  `opencode tokenmax --catalog` and `GET /tokenmax/status?catalog=true`.
+  Default behavior on both stays connected-only, byte-identical to before.
+
 **Not yet done** (tracked, not silently skipped):
-- Availability engine currently only reports resources `Provider.Service`
-  already connected — it does not yet surface the not-yet-connected catalog
-  (what a user *could* configure), nor track availability history over time.
+- Only `catalog_only` and `provider_listed` availability states are ever
+  emitted yet — `verified_callable` needs a real probe call, and
+  `throttled`/`auth_invalid`/… need an observed failure. The full enum
+  exists so the shape doesn't change when a later verification slice
+  starts producing them.
+- Availability history over time is not tracked (only the current state).
 
 ## R2 — Native Child Routing (first slice landed, ahead of R1 completing)
 

@@ -4,7 +4,7 @@ import { Provider } from "@/provider/provider"
 import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
-import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
 // R1 gap closed -- the HTTP equivalent of `opencode tokenmax`
@@ -23,6 +23,17 @@ const Resource = Schema.Struct({
   capabilities: Provider.Model.fields.capabilities,
   cost: Provider.Model.fields.cost,
   billingClass: Schema.Literals(["free", "economy", "standard", "premium"]),
+  availability: Schema.Literals([
+    "catalog_only",
+    "provider_listed",
+    "verified_callable",
+    "throttled",
+    "temp_unavailable",
+    "auth_invalid",
+    "model_not_found",
+    "stale",
+    "unknown",
+  ]),
   connected: Schema.Boolean,
   enabled: Schema.Boolean,
 })
@@ -33,12 +44,20 @@ export const StatusResult = Schema.Struct({
   telemetry: Schema.Array(TokenMaxTelemetry.Event),
 })
 
+// `catalog=true` also returns not-yet-connected resources a user could
+// configure (availability=catalog_only). Default false, so the response
+// stays connected-only and byte-identical to before.
+export const StatusQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  catalog: Schema.optional(Schema.Literals(["true", "false"])),
+})
+
 export const TokenMaxApi = HttpApi.make("tokenmax")
   .add(
     HttpApiGroup.make("tokenmax")
       .add(
         HttpApiEndpoint.get("status", `${root}/status`, {
-          query: WorkspaceRoutingQuery,
+          query: StatusQuery,
           success: described(StatusResult, "TokenMax resource registry, policy, and telemetry status"),
         }).annotateMerge(
           OpenApi.annotations({

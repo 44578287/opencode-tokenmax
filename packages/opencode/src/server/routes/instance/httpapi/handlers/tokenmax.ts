@@ -4,6 +4,7 @@ import { TokenMaxRegistry } from "@/tokenmax/registry"
 import { TokenMaxPolicy } from "@/tokenmax/policy"
 import { TokenMaxTelemetry } from "@/tokenmax/telemetry"
 import { InstanceHttpApi } from "../api"
+import type { StatusQuery } from "../groups/tokenmax"
 
 export const tokenmaxHandlers = HttpApiBuilder.group(InstanceHttpApi, "tokenmax", (handlers) =>
   Effect.gen(function* () {
@@ -11,9 +12,9 @@ export const tokenmaxHandlers = HttpApiBuilder.group(InstanceHttpApi, "tokenmax"
     const policy = yield* TokenMaxPolicy.Service
     const telemetry = yield* TokenMaxTelemetry.Service
 
-    const status = Effect.fn("TokenMaxHttpApi.status")(function* () {
+    const status = Effect.fn("TokenMaxHttpApi.status")(function* (ctx: { query: typeof StatusQuery.Type }) {
       const [resources, policyInfo, telemetryEvents] = yield* Effect.all([
-        registry.list(),
+        registry.list({ includeCatalog: ctx.query.catalog === "true" }),
         policy.get(),
         telemetry.list(),
       ])

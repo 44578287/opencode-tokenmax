@@ -58,6 +58,31 @@ describe("tokenmax HttpApi", () => {
   )
 
   it.live(
+    "catalog=true surfaces not-yet-connected resources as catalog_only, even with no providers enabled",
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirEffect({ config: { formatter: false, lsp: false, enabled_providers: [] } })
+
+      const response = yield* Effect.promise(() =>
+        Promise.resolve(
+          app().request("/tokenmax/status?catalog=true", {
+            headers: { "x-opencode-directory": tmp.path },
+          }),
+        ),
+      )
+
+      expect(response.status).toBe(200)
+      const body = yield* Effect.promise(() => response.json())
+      // The bundled models.dev catalog is large -- with no providers
+      // connected, everything returned must be a catalog_only suggestion.
+      expect(body.resources.length).toBeGreaterThan(0)
+      for (const r of body.resources) {
+        expect(r.connected).toBe(false)
+        expect(r.availability).toBe("catalog_only")
+      }
+    }),
+  )
+
+  it.live(
     "reflects tokenmax.json policy overrides in policyActive",
     Effect.gen(function* () {
       const tmp = yield* tmpdirEffect({

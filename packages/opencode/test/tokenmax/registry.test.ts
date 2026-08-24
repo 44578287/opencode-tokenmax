@@ -157,6 +157,61 @@ it.instance(
   },
 )
 
+it.instance(
+  "list() marks every connected resource provider_listed and connected, by default no catalog entries",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* TokenMaxRegistry.Service
+      const resources = yield* registry.list()
+      // Default list() is connected-only, so every entry must be connected
+      // and availability=provider_listed -- byte-identical to R1's behavior
+      // plus the new availability field.
+      for (const r of resources) {
+        if (!r.connected) throw new Error(`default list() must be connected-only, saw connected=false for ${r.providerID}`)
+        if (r.availability !== "provider_listed")
+          throw new Error(`expected connected resource availability 'provider_listed', got '${r.availability}'`)
+      }
+      const free = resources.find((r) => r.providerID === "free" && r.modelID === "free-model")
+      if (!free) throw new Error("expected 'free' model in the default (connected) list")
+    }),
+  { config: registryConfig },
+)
+
+it.instance(
+  "list({ includeCatalog: true }) adds not-yet-connected resources as catalog_only, without dropping connected ones",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* TokenMaxRegistry.Service
+      const connectedOnly = yield* registry.list()
+      const withCatalog = yield* registry.list({ includeCatalog: true })
+
+      // Catalog is strictly additive: every connected resource is still present.
+      for (const r of connectedOnly) {
+        const stillThere = withCatalog.find((c) => c.providerID === r.providerID && c.modelID === r.modelID)
+        if (!stillThere) throw new Error(`includeCatalog dropped a connected resource: ${r.providerID}/${r.modelID}`)
+        if (!stillThere.connected || stillThere.availability !== "provider_listed")
+          throw new Error("a connected resource must stay connected/provider_listed even with the catalog included")
+      }
+
+      // The bundled ModelsDev catalog is large, so there must be catalog-only
+      // entries, and each must be honestly marked (connected=false + catalog_only).
+      const catalogOnly = withCatalog.filter((r) => !r.connected)
+      if (catalogOnly.length === 0) throw new Error("expected some catalog-only resources from the ModelsDev catalog")
+      for (const r of catalogOnly) {
+        if (r.availability !== "catalog_only")
+          throw new Error(`a not-connected resource must be availability 'catalog_only', got '${r.availability}'`)
+      }
+
+      // A provider is never both connected and catalog-only.
+      const connectedProviders = new Set(connectedOnly.map((r) => r.providerID))
+      for (const r of catalogOnly) {
+        if (connectedProviders.has(r.providerID))
+          throw new Error(`provider ${r.providerID} appeared as both connected and catalog-only`)
+      }
+    }),
+  { config: registryConfig },
+)
+
 const policyOnly = testEffect(LayerNode.compile(LayerNode.group([TokenMaxPolicy.node])))
 
 policyOnly.instance("TokenMaxPolicy.get() returns an empty policy when no tokenmax.json exists", () =>

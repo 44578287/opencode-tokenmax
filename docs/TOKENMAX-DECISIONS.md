@@ -471,3 +471,39 @@ provider/model pair (via a `makeReliabilityConfig()` helper), so no two
 tests' recorded histories can ever mix -- the same isolation discipline
 `enabled_providers` allowlisting already applied to ambient
 credential leakage (R2), now applied to cross-test telemetry leakage too.
+
+### D-016: availability is a distinct per-resource state; catalog surfacing is opt-in
+
+Closing R1's last "not yet done" (availability engine + not-yet-connected
+catalog). Two design choices worth recording:
+
+**Availability is tracked separately from capability/cost, per the
+Architecture doc.** `availability.ts` is a pure module: a `State` enum
+(`catalog_only`/`provider_listed`/`verified_callable`/`throttled`/… the
+Architecture's full list) plus `isCallable()` and `fromConnected()`.
+Honest scope: only `catalog_only` (in the ModelsDev catalog, not
+connected) and `provider_listed` (provider is configured/initialized, so
+listed and presumed callable) are ever emitted yet. `verified_callable`
+would need a real probe call; `throttled`/`auth_invalid`/… need an
+observed failure. The full enum is defined now so the Resource shape and
+every consumer (router, CLI, HTTP schema) don't have to change when a
+later verification slice starts producing the richer states -- same
+"define the shape ahead of the producer" discipline `telemetry.ts` used.
+
+**The catalog is opt-in, so nothing gets slower or noisier by default.**
+`registry.list()` stays connected-only (byte-identical to R1);
+`list({ includeCatalog: true })` additionally maps the full ModelsDev
+universe through the *same* `Provider.fromModelsDevProvider` the provider
+service itself uses (no parallel mapping -- D-001 reuse), emitting the
+not-yet-connected providers as `connected: false` / `availability:
+catalog_only`. That catalog is large (~5.7k models from the bundled
+models.dev data), so making every `opencode tokenmax` / `GET
+/tokenmax/status` call compute and return it would be a real regression;
+it's reached explicitly via `--catalog` / `?catalog=true`. The router
+never sees catalog entries -- it calls the default `list()`, and its
+`connected` filter would skip them anyway.
+
+Tested against the real ModelsDev service (the catalog integration test
+asserts invariants -- every catalog entry is `connected: false` +
+`catalog_only`, connected entries are untouched, no provider is both --
+rather than the exact ~5.7k count, which depends on bundled data).
