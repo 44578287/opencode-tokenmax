@@ -100,3 +100,24 @@ jobs:
         run: ./scripts/e2e/windows-e2e.ps1 -DesktopDir "${{ github.workspace }}\packages\desktop"
         working-directory: packages/desktop
         timeout-minutes: 45
+
+      # windows-e2e.ps1 builds real installers for all three channels
+      # (packages/desktop/dist-{prod,dev,tokenmax-dev}/installer.exe) before
+      # installing/verifying/uninstalling them on this same ephemeral
+      # runner -- previously nothing persisted them anywhere, so a
+      # successful E2E run produced no downloadable artifact at all.
+      # `if: always()` + `if-no-files-found: warn` so a build that got far
+      # enough to produce an installer before a later assertion failed
+      # still uploads what it has, without failing the upload step itself
+      # on an earlier-stage failure that never produced anything.
+      - name: Upload built installers (attempt ${{ matrix.attempt }})
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tokenmax-desktop-installers-attempt-${{ matrix.attempt }}
+          path: |
+            packages/desktop/dist-prod/installer.exe
+            packages/desktop/dist-dev/installer.exe
+            packages/desktop/dist-tokenmax-dev/installer.exe
+          if-no-files-found: warn
+          retention-days: 14
